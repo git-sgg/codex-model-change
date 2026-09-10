@@ -50,7 +50,7 @@ cd codex-model-change
 | `cx doctor` | 体检：key 有效性 / 直连连通性 / 会话健康 |
 | `cx fix <会话ID>` | 修复某个打不开/报 404 的会话（ID 取 `cx status` 里显示的前 8 位即可） |
 | `cx fix last` | 修复最近一个会话 |
-| `cx fix-all <目标>` | **批量把所有老会话切换到目标模型**（`deepseek` 或 `gpt`，需退 App） |
+| `cx fix-all <目标>` | **批量把所有老会话切换到目标模型**（`deepseek` 或 `gpt`，需退 App）；切到 gpt 时自动清理旧代理遗留的不兼容历史条目（`reasoning.content` 等），避免续聊报 `Invalid 'input[..].content'` |
 | `cx fix-all deepseek --limit 20` | 只批量切换最近 20 个会话 |
 
 **关于老会话**：每个会话记录着自己创建时的模型，`cx use` 只影响新会话——老会话继续用原模型，互不干扰。想把老会话搬到新模型：单个用 `cx fix`，全部用 `cx fix-all`（会先备份数据库和会话文件，确认后执行）。

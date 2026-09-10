@@ -263,6 +263,26 @@ def is_ds(model):
     return isinstance(model, str) and (model in DS_IDS or model.startswith("deepseek"))
 
 # ---------- 批量切换老会话 ----------
+def sanitize_rollout(path):
+    """移除旧代理时代 OpenAI 不兼容的 reasoning 条目(id 为 rs_ocx_*,或带 content 字段)。
+    OpenAI 对这类条目会报 Invalid input[..].content / Item not found。返回移除数量。"""
+    removed = 0
+    out = []
+    for line in open(path, encoding="utf-8"):
+        try:
+            d = json.loads(line)
+            pl = d.get("payload", {})
+            if (d.get("type") == "response_item" and pl.get("type") == "reasoning"
+                    and (str(pl.get("id", "")).startswith("rs_ocx_") or pl.get("content"))):
+                removed += 1
+                continue
+        except Exception:
+            pass
+        out.append(line)
+    if removed:
+        open(path, "w", encoding="utf-8").writelines(out)
+    return removed
+
 def rewrite_rollout(path, model, provider):
     """把 rollout 文件里记录的模型/provider 统一改写为指定值,返回是否修改"""
     changed = False
@@ -304,7 +324,13 @@ def cmd_fix_all():
          "ORDER BY updated_at DESC")
     if limit: q += f" LIMIT {limit}"
     rows = db.execute(q).fetchall()
-    todo = [(tid, m, p, rp) for tid, m, p, rp in rows if m != model or p != provider]
+    todo = []
+    for tid, m, p, rp in rows:
+        needs_model = (m != model or p != provider)
+        needs_sanitize = (provider == "openai" and rp and os.path.exists(rp)
+                          and "rs_ocx_" in open(rp, encoding="utf-8", errors="ignore").read(2_000_000))
+        if needs_model or needs_sanitize:
+            todo.append((tid, m, p, rp, needs_model))
     if not todo:
         ok(f"所有会话已经是 {model},无需切换"); db.close(); return
     print(f"待切换 {len(todo)} / {len(rows)} 个会话 → {model} ({provider})")
@@ -315,12 +341,14 @@ def cmd_fix_all():
     shutil.copy2(dbpath, bak)
     ok(f"数据库已备份: {bak}")
     n = 0
-    for tid, m, p, rp in todo:
+    for tid, m, p, rp, needs_model in todo:
         if rp and os.path.exists(rp):
             bakj = rp + f".bak.cx-fixall-{ts}"
             if not os.path.exists(bakj): shutil.copy2(rp, bakj)
-            rewrite_rollout(rp, model, provider)
-        db.execute("UPDATE threads SET model=?, model_provider=? WHERE id=?", (model, provider, tid))
+            if needs_model: rewrite_rollout(rp, model, provider)
+            if provider == "openai": sanitize_rollout(rp)
+        if needs_model:
+            db.execute("UPDATE threads SET model=?, model_provider=? WHERE id=?", (model, provider, tid))
         n += 1
     db.commit(); db.close()
     ok(f"已切换 {n} 个会话 → {model}。重开 App 生效")
