@@ -1,6 +1,6 @@
 # cx — Codex 模型直连切换器
 
-让 OpenAI Codex（桌面 App / CLI）**直连 DeepSeek**（或切回原生 ChatGPT），无需任何代理软件（如 ocx）。
+让 OpenAI Codex（桌面 App / CLI）**直连 DeepSeek**（或切回原生 ChatGPT），无需任何代理软件。
 
 `cx` 是一个单文件 Python CLI，无常驻进程、无 launchd 服务依赖（仅一个可选的开机环境变量注入）。
 
@@ -13,7 +13,7 @@ Codex ──直连──> api.deepseek.com        (cx 配置一条 model_provide
 Codex ──原生──> ChatGPT 登录态          (cx 注释掉 model_provider 即回落)
 ```
 
-中间没有任何协议翻译层——这是 cx 与 ocx 类代理工具的本质区别。
+中间没有任何协议翻译层，保持协议原生匹配。
 
 ## 安装
 
@@ -48,9 +48,12 @@ cd codex-model-change
 | `cx use gpt` | 切回原生 ChatGPT（走 ChatGPT 登录态，无需 API key） |
 | `cx key <API_KEY>` | 保存 DeepSeek key 并注入 GUI 环境（桌面 App 需要） |
 | `cx doctor` | 体检：key 有效性 / 直连连通性 / 会话健康 |
-| `cx fix <会话UUID>` | 修复某个打不开/报 404 的老会话 |
+| `cx fix <会话ID>` | 修复某个打不开/报 404 的会话（ID 取 `cx status` 里显示的前 8 位即可） |
 | `cx fix last` | 修复最近一个会话 |
-| `cx migrate-sessions` | 一次性把旧代理（ocx）时代的 DeepSeek 会话迁移为直连格式 |
+| `cx fix-all <目标>` | **批量把所有老会话切换到目标模型**（`deepseek` 或 `gpt`，需退 App） |
+| `cx fix-all deepseek --limit 20` | 只批量切换最近 20 个会话 |
+
+**关于老会话**：每个会话记录着自己创建时的模型，`cx use` 只影响新会话——老会话继续用原模型，互不干扰。想把老会话搬到新模型：单个用 `cx fix`，全部用 `cx fix-all`（会先备份数据库和会话文件，确认后执行）。
 
 每次 `cx use` 都会自动备份 `config.toml`（`config.toml.bak.cx-<时间戳>`），随时可手动回滚。
 
@@ -102,16 +105,7 @@ launchctl setenv DEEPSEEK_API_KEY "$(cat ~/.cx/deepseek.key)"
 
 之后**完全退出并重开 Codex App** 即可。App 的模型选择器里会出现 DeepSeek Chat / DeepSeek Reasoner。
 
-## 从 ocx 迁移
-
-如果你之前用 ocx（或其它把模型改名的代理），老会话记录的是代理别名（如 `deepseek/deepseek-v4-flash`），直连后无法续聊。执行：
-
-```bash
-# 先完全退出 Codex App（会话有写入锁）
-cx migrate-sessions
-```
-
-它会备份 `state_5.sqlite` 和所有 rollout 文件后，把 DeepSeek 系会话统一改为 `deepseek-chat` / `provider=deepseek`。
+> **从其它代理工具迁移过来的用户**：如果你的老会话记录的是代理别名（如 `deepseek/deepseek-v4-flash`），直连后无法续聊。先完全退出 App，然后执行 `cx fix-all deepseek` 一次性把所有会话迁移为直连格式。
 
 ## 常见问题
 

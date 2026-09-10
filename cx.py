@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""cx — Codex 模型直连切换器（代替 ocx 的轻量方案）
+"""cx — Codex 模型直连切换器
 
 无代理、无常驻进程。Codex 直连 deepseek(Responses API) / 原生 ChatGPT。
 命令:
@@ -7,8 +7,10 @@
   cx use deepseek|gpt  切换默认模型(改写 ~/.codex/config.toml, 自动备份)
   cx doctor            体检: key/直连/会话健康
   cx key <API_KEY>     保存 deepseek key 并注入 GUI 环境(launchctl setenv)
-  cx fix <会话UUID>    修复坏会话(续跑一轮写入正确模型)
-  cx migrate-sessions  把 ocx 时代的 deepseek 会话迁移为直连 id(需退 App)
+  cx fix <会话ID>      修复单个会话(续跑一轮写入正确模型)
+  cx fix-all <目标>    把所有老会话批量切换到目标模型(需退 App)
+                       例: cx fix-all deepseek / cx fix-all gpt --limit 20
+  cx migrate-sessions  把旧代理时代的 deepseek 会话迁移为直连 id(需退 App)
 """
 import json, os, re, glob, sqlite3, subprocess, sys, shutil, time, urllib.request, urllib.error
 
@@ -157,7 +159,7 @@ def cmd_key():
         if os.path.exists(ocx):
             try:
                 key = json.load(open(ocx))["providers"]["deepseek"]["apiKey"]
-                info(f"从 ocx 配置读取到 key({key[:8]}...)")
+                info(f"从旧代理配置(~/.opencodex)读取到 key({key[:8]}...)")
             except Exception: pass
     if not key: err("用法: cx key <DEEPSEEK_API_KEY>")
     os.makedirs(CX_DIR, exist_ok=True)
@@ -189,7 +191,6 @@ def cmd_status():
     p = re.search(r'(?m)^model_provider\s*=\s*"([^"]+)"', text)
     print(f"默认模型   : {m.group(1) if m else '(未设置)'}")
     print(f"默认provider: {p.group(1) if p else 'openai(原生)'}")
-    print(f"ocx 代理   : {'运行中' if ocx_alive() else '未运行'}")
     print(f"key        : {'已保存' if load_key() else '未保存(cx key <KEY>)'}")
     try:
         db = sqlite3.connect(f"file:{CODEX_HOME}/state_5.sqlite?mode=ro", uri=True)
@@ -198,15 +199,9 @@ def cmd_status():
         print("\n最近会话:")
         for r in rows: print(f"  {r[0]}  {str(r[1]):<28} {r[2]}")
         bad = db.execute("SELECT COUNT(*) FROM threads WHERE model LIKE 'deepseek/%' OR model='deepseek-v4-flash'").fetchone()[0]
-        if bad: print(f"\n⚠️  {bad} 个会话仍是 ocx 时代模型 id(需要 cx migrate-sessions)")
+        if bad: print(f"\n⚠️  {bad} 个会话仍是旧格式模型 id(可运行 cx fix-all deepseek 统一迁移)")
     except Exception as e:
         print("(会话库读取失败: %s)" % e)
-
-def ocx_alive():
-    try:
-        urllib.request.urlopen("http://127.0.0.1:10100/healthz", timeout=2)
-        return True
-    except Exception: return False
 
 def cmd_doctor():
     print("== cx doctor ==")
@@ -223,7 +218,6 @@ def cmd_doctor():
             err(f"deepseek API 连不上: {e}")
     text = read_cfg()
     ok("config.toml 读取正常") if "[model_providers.deepseek]" in text or "model_provider" in text else info("config 尚未配置 provider")
-    print(("✅" if ocx_alive() else "ℹ️ ") + " ocx 代理: " + ("运行中(后备可用)" if ocx_alive() else "未运行"))
     cmd_status()
 
 def cmd_fix():
@@ -246,6 +240,69 @@ def cmd_fix():
 
 def is_ds(model):
     return isinstance(model, str) and (model in DS_IDS or model.startswith("deepseek"))
+
+# ---------- 批量切换老会话 ----------
+def rewrite_rollout(path, model, provider):
+    """把 rollout 文件里记录的模型/provider 统一改写为指定值,返回是否修改"""
+    changed = False
+    new_lines = []
+    for line in open(path, encoding="utf-8"):
+        if '"turn_context"' in line or '"session_meta"' in line:
+            try:
+                d = json.loads(line)
+                pl = d.get("payload", {})
+                if d.get("type") == "session_meta":
+                    if pl.get("model") != model: pl["model"] = model; changed = True
+                    if pl.get("model_provider") != provider: pl["model_provider"] = provider; changed = True
+                elif d.get("type") == "turn_context":
+                    if pl.get("model") != model: pl["model"] = model; changed = True
+                    st = (pl.get("collaboration_mode") or {}).get("settings") or {}
+                    if st.get("model") and st.get("model") != model: st["model"] = model; changed = True
+                if changed: line = json.dumps(d, ensure_ascii=False) + "\n"
+            except Exception: pass
+        new_lines.append(line)
+    if changed:
+        open(path, "w", encoding="utf-8").writelines(new_lines)
+    return changed
+
+def cmd_fix_all():
+    args = sys.argv[2:]
+    which = args[0] if args else ""
+    limit = None
+    if "--limit" in args:
+        i = args.index("--limit")
+        limit = int(args[i + 1]) if len(args) > i + 1 else None
+    if which not in ("deepseek", "gpt"):
+        err("用法: cx fix-all deepseek|gpt [--limit N]   (--limit N 只改最近 N 个,默认全部)")
+    model, provider = (DS_MODEL, "deepseek") if which == "deepseek" else (GPT_MODEL, "openai")
+    if app_running():
+        err("请先完全退出 ChatGPT/Codex App(会话有写入锁)。单个会话可用 cx fix <ID>")
+    dbpath = os.path.join(CODEX_HOME, "state_5.sqlite")
+    db = sqlite3.connect(dbpath)
+    q = ("SELECT id, model, model_provider, rollout_path FROM threads "
+         "ORDER BY updated_at DESC")
+    if limit: q += f" LIMIT {limit}"
+    rows = db.execute(q).fetchall()
+    todo = [(tid, m, p, rp) for tid, m, p, rp in rows if m != model or p != provider]
+    if not todo:
+        ok(f"所有会话已经是 {model},无需切换"); db.close(); return
+    print(f"待切换 {len(todo)} / {len(rows)} 个会话 → {model} ({provider})")
+    if input("确认执行? [y/N] ").strip().lower() != "y":
+        info("已取消"); db.close(); return
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    bak = os.path.join(CODEX_HOME, f"state_5.sqlite.bak.cx-fixall-{ts}")
+    shutil.copy2(dbpath, bak)
+    ok(f"数据库已备份: {bak}")
+    n = 0
+    for tid, m, p, rp in todo:
+        if rp and os.path.exists(rp):
+            bakj = rp + f".bak.cx-fixall-{ts}"
+            if not os.path.exists(bakj): shutil.copy2(rp, bakj)
+            rewrite_rollout(rp, model, provider)
+        db.execute("UPDATE threads SET model=?, model_provider=? WHERE id=?", (model, provider, tid))
+        n += 1
+    db.commit(); db.close()
+    ok(f"已切换 {n} 个会话 → {model}。重开 App 生效")
 
 def cmd_migrate():
     force = "--yes" in sys.argv
@@ -296,6 +353,7 @@ def main():
     elif c == "key": cmd_key()
     elif c == "doctor": cmd_doctor()
     elif c == "fix": cmd_fix()
+    elif c == "fix-all": cmd_fix_all()
     elif c == "migrate-sessions": cmd_migrate()
     elif c in ("-h", "--help", "help"): print(__doc__)
     else: err(f"未知命令: {c}(cx help 查看用法)")
