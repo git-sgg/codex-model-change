@@ -17,17 +17,24 @@ Codex ──原生──> ChatGPT 登录态          (cx 注释掉 model_provide
 
 ## 安装
 
+**方式一：npm 安装（推荐）**
+
+```bash
+npm install -g codex-model-change
+```
+
+包内是零依赖的 Python 脚本（macOS 自带 python3），Node 只做入口转发，装完即可用 `cx` 命令。
+
+**方式二：源码安装**
+
 ```bash
 # 1. 下载或 clone 本仓库
 git clone https://github.com/git-sgg/codex-model-change.git
 cd codex-model-change
 
-# 2. 安装（复制到 PATH 并生成模型目录）
-chmod +x cx
-sudo cp cx /usr/local/bin/cx        # 或 /opt/homebrew/bin/cx
-
-# 3. 保存你的 DeepSeek API key
-cx key sk-xxxxxxxxxxxxxxxx
+# 2. 运行安装脚本（复制到 PATH）
+./install.sh                      # 默认装到 /usr/local/bin/cx
+# 或指定位置: ./install.sh /opt/homebrew/bin/cx
 ```
 
 前置要求：已安装 [OpenAI Codex CLI](https://github.com/openai/codex)（`brew install codex`）并至少成功运行过一次（`~/.codex/config.toml` 存在）。

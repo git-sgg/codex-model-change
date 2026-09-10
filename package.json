@@ -1,0 +1,37 @@
+{
+  "name": "codex-model-change",
+  "version": "1.0.0",
+  "description": "Switch OpenAI Codex (CLI / desktop app) between DeepSeek direct-connect and native ChatGPT. No proxy, no daemon.",
+  "bin": {
+    "cx": "bin/cx.js"
+  },
+  "files": [
+    "bin/",
+    "cx.py",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "codex",
+    "deepseek",
+    "chatgpt",
+    "openai",
+    "model-switcher",
+    "cli"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=14"
+  },
+  "os": [
+    "darwin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/git-sgg/codex-model-change.git"
+  },
+  "homepage": "https://github.com/git-sgg/codex-model-change#readme",
+  "bugs": {
+    "url": "https://github.com/git-sgg/codex-model-change/issues"
+  }
+}
