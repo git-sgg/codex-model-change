@@ -47,6 +47,42 @@ cx key sk-xxxxxxxxxxxxxxxx
 
 每次 `cx use` 都会自动备份 `config.toml`（`config.toml.bak.cx-<时间戳>`），随时可手动回滚。
 
+## 从零添加 DeepSeek（Codex 里还没有 DeepSeek 时）
+
+如果你的 Codex 从未配置过 DeepSeek（`~/.codex/config.toml` 里没有 `[model_providers.deepseek]`），按下面四步走，**全程不需要手改任何配置文件**：
+
+**第 1 步：获取 DeepSeek API key**
+
+到 [platform.deepseek.com](https://platform.deepseek.com) 注册/登录，在「API Keys」页面创建一个 key（`sk-` 开头），并确保账户有余额。
+
+**第 2 步：安装 cx**（见上方「安装」）
+
+**第 3 步：保存 key 并切换**
+
+```bash
+cx key sk-你的key
+cx use deepseek
+```
+
+`cx key` 会把 key 存到本机 `~/.cx/deepseek.key` 并注入 GUI 环境；`cx use deepseek` 会自动在 `~/.codex/config.toml` 末尾写入完整的 provider 配置：
+
+```toml
+# --- added by cx (direct deepseek) ---
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com/v1"
+env_key = "DEEPSEEK_API_KEY"
+wire_api = "responses"
+```
+
+并把顶部改为 `model_provider = "deepseek"` / `model = "deepseek-chat"`，同时生成模型目录 `~/.codex/cx-catalog.json`。
+
+**第 4 步：完成桌面 App 配置**（见下方「桌面 App 的一次性配置」），然后完全退出并重开 App。
+
+验证：跑 `cx doctor`，三项全 ✅ 即配置成功；或在 App 里发条消息试试。
+
+> 如果 `cx use deepseek` 报「找不到 config.toml」，说明你还没运行过 codex CLI——先随便跑一次 `codex "hello"` 让它生成配置文件，再执行上面的步骤。
+
 ## 桌面 App 的一次性配置
 
 Codex 桌面 App 由 launchd 拉起，读不到 shell 里的环境变量，需要把 key 注入 GUI 环境：
