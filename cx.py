@@ -35,6 +35,27 @@ wire_api = "responses"
 GPT_MODEL = "gpt-5.6-sol"
 DS_IDS = ("deepseek/deepseek-v4-flash", "deepseek-v4-flash")
 
+HELP = """cx — Codex 模型直连切换器
+
+用法: cx <命令> [参数]
+
+命令一览:
+  status               查看默认模型/provider/最近会话(不带参数执行 cx 等同于此)
+  use deepseek|gpt     切换默认模型(改写 config.toml,自动备份)
+  key <API_KEY>        保存 deepseek key 并注入 GUI 环境(桌面 App 需要)
+  doctor               体检: key 有效性/直连连通性/会话健康
+  fix <会话ID|last>    修复单个会话(ID 取 status 里显示的前 8 位即可)
+  fix-all <目标>       批量把所有老会话切换到目标模型(需退 App)
+                       用法: cx fix-all deepseek|gpt [--limit N]
+  migrate-sessions     旧代理会话迁移(遗留命令,一般用 fix-all 即可)
+  help                 显示本帮助
+
+要点:
+  - 切换只影响新会话;老会话各自保持原模型,想搬运用 fix / fix-all
+  - 改过配置后,桌面 App 必须完全退出再重开才会生效
+  - 仓库: https://github.com/git-sgg/codex-model-change
+"""
+
 def err(m): print("❌ " + m); sys.exit(1)
 def ok(m): print("✅ " + m)
 def info(m): print("ℹ️  " + m)
@@ -355,7 +376,7 @@ def main():
     elif c == "fix": cmd_fix()
     elif c == "fix-all": cmd_fix_all()
     elif c == "migrate-sessions": cmd_migrate()
-    elif c in ("-h", "--help", "help"): print(__doc__)
+    elif c in ("-h", "--help", "help"): print(HELP)
     else: err(f"未知命令: {c}(cx help 查看用法)")
 
 if __name__ == "__main__":
