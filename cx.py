@@ -9,12 +9,11 @@
   cx key <API_KEY>     保存 deepseek key 并注入 GUI 环境(launchctl setenv)
   cx fix <会话ID>      修复单个会话(续跑一轮写入正确模型)
   cx fix-all <目标>    把所有老会话批量切换到目标模型(需退 App)
-                       例: cx fix-all deepseek / cx fix-all gpt --limit 20
-  cx migrate-sessions  把旧代理时代的 deepseek 会话迁移为直连 id(需退 App)
+                       例: cx fix-all deepseek --limit 10 (只改最近 10 个)
 """
 import json, os, re, glob, sqlite3, subprocess, sys, shutil, time, urllib.request, urllib.error
 
-CX_VERSION = "1.0.3"
+CX_VERSION = "1.0.4"
 
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 CONFIG = os.path.join(CODEX_HOME, "config.toml")
@@ -35,7 +34,6 @@ wire_api = "responses"
 """
 
 GPT_MODEL = "gpt-5.6-sol"
-DS_IDS = ("deepseek/deepseek-v4-flash", "deepseek-v4-flash")
 
 HELP = """cx — Codex 模型直连切换器
 
@@ -49,7 +47,7 @@ HELP = """cx — Codex 模型直连切换器
   fix <会话ID|last>    修复单个会话(ID 取 status 里显示的前 8 位即可)
   fix-all <目标>       批量把所有老会话切换到目标模型(需退 App)
                        用法: cx fix-all deepseek|gpt [--limit N]
-  migrate-sessions     旧代理会话迁移(遗留命令,一般用 fix-all 即可)
+                       例: cx fix-all deepseek --limit 10 (只改最近 10 个)
   version              显示 cx 版本
   help                 显示本帮助
 
@@ -263,9 +261,6 @@ def cmd_fix():
     print(tail)
     ok("修复完成") if r.returncode == 0 else err(f"修复失败 exit={r.returncode}")
 
-def is_ds(model):
-    return isinstance(model, str) and (model in DS_IDS or model.startswith("deepseek"))
-
 # ---------- 批量切换老会话 ----------
 def sanitize_rollout(path):
     """移除旧代理时代 OpenAI 不兼容的 reasoning 条目(id 为 rs_ocx_*,或带 content 字段)。
@@ -312,11 +307,14 @@ def rewrite_rollout(path, model, provider):
 
 def cmd_fix_all():
     args = sys.argv[2:]
-    which = args[0] if args else ""
+    which = args[0] if args and not args[0].startswith("-") else ""
     limit = None
-    if "--limit" in args:
-        i = args.index("--limit")
-        limit = int(args[i + 1]) if len(args) > i + 1 else None
+    for i, a in enumerate(args):
+        if a == "--limit" and i + 1 < len(args):
+            limit = int(args[i + 1]) if args[i + 1].isdigit() else None
+        elif a.startswith("--limit="):
+            v = a.split("=", 1)[1]
+            limit = int(v) if v.isdigit() else None
     if which not in ("deepseek", "gpt"):
         err("用法: cx fix-all deepseek|gpt [--limit N]   (--limit N 只改最近 N 个,默认全部)")
     model, provider = (DS_MODEL, "deepseek") if which == "deepseek" else (GPT_MODEL, "openai")
@@ -337,7 +335,8 @@ def cmd_fix_all():
             todo.append((tid, m, p, rp, needs_model))
     if not todo:
         ok(f"所有会话已经是 {model},无需切换"); db.close(); return
-    print(f"待切换 {len(todo)} / {len(rows)} 个会话 → {model} ({provider})")
+    scope = f"最近 {limit} 个中" if limit else ""
+    print(f"{scope}待切换 {len(todo)} / {len(rows)} 个会话 → {model} ({provider})")
     if input("确认执行? [y/N] ").strip().lower() != "y":
         info("已取消"); db.close(); return
     ts = time.strftime("%Y%m%d-%H%M%S")
@@ -357,47 +356,6 @@ def cmd_fix_all():
     db.commit(); db.close()
     ok(f"已切换 {n} 个会话 → {model}。重开 App 生效")
 
-def cmd_migrate():
-    force = "--yes" in sys.argv
-    if app_running() and not force:
-        err("请先完全退出 ChatGPT/Codex App(或加 --yes 跳过检查,不推荐)")
-    db = sqlite3.connect(os.path.join(CODEX_HOME, "state_5.sqlite"))
-    rows = db.execute("SELECT id, model, rollout_path FROM threads WHERE model LIKE 'deepseek%'").fetchall()
-    if not rows: ok("没有需要迁移的会话"); return
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    bak = os.path.join(CODEX_HOME, f"state_5.sqlite.bak.cx-migrate-{ts}")
-    shutil.copy2(os.path.join(CODEX_HOME, "state_5.sqlite"), bak)
-    ok(f"数据库已备份: {bak}")
-    n = 0
-    for tid, model, path in rows:
-        if os.path.exists(path):
-            bakj = path + f".bak.cx-{ts}"
-            if not os.path.exists(bakj): shutil.copy2(path, bakj)
-            new_lines = []
-            changed = False
-            for line in open(path, encoding="utf-8"):
-                if '"turn_context"' in line or '"session_meta"' in line:
-                    try:
-                        d = json.loads(line)
-                        pl = d.get("payload", {})
-                        if d.get("type") == "session_meta":
-                            if is_ds(pl.get("model")): pl["model"] = DS_MODEL; changed = True
-                            if pl.get("model_provider") == "openai": pl["model_provider"] = "deepseek"; changed = True
-                        elif d.get("type") == "turn_context":
-                            if is_ds(pl.get("model")): pl["model"] = DS_MODEL; changed = True
-                            cm = pl.get("collaboration_mode") or {}
-                            st = cm.get("settings") or {}
-                            if is_ds(st.get("model")): st["model"] = DS_MODEL; changed = True
-                        if changed: line = json.dumps(d, ensure_ascii=False) + "\n"
-                    except Exception: pass
-                new_lines.append(line)
-            if changed:
-                open(path, "w", encoding="utf-8").writelines(new_lines); n += 1
-    db.execute("UPDATE threads SET model=?, model_provider='deepseek' WHERE model LIKE 'deepseek%'", (DS_MODEL,))
-    db.commit()
-    ok(f"已迁移 {n} 个 rollout / {len(rows)} 条记录 → deepseek-chat")
-    db.close()
-
 def main():
     if len(sys.argv) < 2: cmd_status(); return
     c = sys.argv[1]
@@ -407,7 +365,6 @@ def main():
     elif c == "doctor": cmd_doctor()
     elif c == "fix": cmd_fix()
     elif c == "fix-all": cmd_fix_all()
-    elif c == "migrate-sessions": cmd_migrate()
     elif c in ("version", "-V", "--version"): print(f"cx {CX_VERSION}")
     elif c in ("-h", "--help", "help"): print(HELP)
     else: err(f"未知命令: {c}(cx help 查看用法)")
