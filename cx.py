@@ -327,8 +327,8 @@ def cmd_fix_all():
     todo = []
     for tid, m, p, rp in rows:
         needs_model = (m != model or p != provider)
-        needs_sanitize = (provider == "openai" and rp and os.path.exists(rp)
-                          and "rs_ocx_" in open(rp, encoding="utf-8", errors="ignore").read(2_000_000))
+        # 清洗判断不能只扫文件前缀:脏条目可能埋在大会话深处,只要目标是 openai 就全量清洗(幂等)
+        needs_sanitize = (provider == "openai" and rp and os.path.exists(rp))
         if needs_model or needs_sanitize:
             todo.append((tid, m, p, rp, needs_model))
     if not todo:
