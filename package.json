@@ -1,6 +1,6 @@
 {
   "name": "codex-model-change",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Switch OpenAI Codex (CLI / desktop app) between DeepSeek direct-connect and native ChatGPT. No proxy, no daemon.",
   "bin": {
     "cx": "bin/cx.js"

@@ -14,6 +14,8 @@
 """
 import json, os, re, glob, sqlite3, subprocess, sys, shutil, time, urllib.request, urllib.error
 
+CX_VERSION = "1.0.2"
+
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 CONFIG = os.path.join(CODEX_HOME, "config.toml")
 CX_DIR = os.path.expanduser("~/.cx")
@@ -48,6 +50,7 @@ HELP = """cx — Codex 模型直连切换器
   fix-all <目标>       批量把所有老会话切换到目标模型(需退 App)
                        用法: cx fix-all deepseek|gpt [--limit N]
   migrate-sessions     旧代理会话迁移(遗留命令,一般用 fix-all 即可)
+  version              显示 cx 版本
   help                 显示本帮助
 
 要点:
@@ -207,6 +210,7 @@ def app_running():
     return subprocess.run(["pgrep", "-f", APP_PGREP], capture_output=True).returncode == 0
 
 def cmd_status():
+    print(f"cx 版本    : {CX_VERSION}")
     text = read_cfg()
     m = re.search(r'(?m)^model\s*=\s*"([^"]+)"', text)
     p = re.search(r'(?m)^model_provider\s*=\s*"([^"]+)"', text)
@@ -404,6 +408,7 @@ def main():
     elif c == "fix": cmd_fix()
     elif c == "fix-all": cmd_fix_all()
     elif c == "migrate-sessions": cmd_migrate()
+    elif c in ("version", "-V", "--version"): print(f"cx {CX_VERSION}")
     elif c in ("-h", "--help", "help"): print(HELP)
     else: err(f"未知命令: {c}(cx help 查看用法)")
 
