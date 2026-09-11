@@ -124,6 +124,19 @@ App 没读到 `DEEPSEEK_API_KEY`。执行上面「桌面 App 的一次性配置�
 **Q: 提示 `deepseek 拒绝了 exec 自定义工具` 之类的 400？**
 模型目录（`~/.codex/cx-catalog.json`）被改坏了，重跑一次 `cx use deepseek` 会重新生成。
 
+**Q: 跑完 `cx fix-all` 后，重开 App 某个会话“今天聊的内容不见了”？**
+
+1.0.5 之前确实存在这个坑：`cx fix-all` 清洗老会话时会删掉部分 `reasoning` 行，而会话文件（rollout）
+里每条记录带一个必须**从 0 起连续递增**的 `ordinal`。删行不重编号就留下缺口，App 的投影缓存
+（`~/.codex/thread_history_1.sqlite`）会**永久卡在缺口处**，于是之后的新内容再也进不了界面——
+看起来就像“丢了”（其实原始 rollout 文件里还在，只是没被投影出来）。
+
+1.0.5 已修复：`fix-all` 现在会在改写后自动重编号 `ordinal` 消除缺口，并清掉该会话的投影缓存，
+让 App 下次打开时从会话文件完整重建。
+
+若用的是 1.0.5 之前的版本且已中招：升级后**完全退出 App**，再重新打开该会话即可恢复；
+仍不显示时，可手动删掉 `~/.codex/thread_history_1.sqlite` 中对应 `thread_id` 的行，强制其重建。
+
 ## 隐私说明
 
 - API key 仅保存在本机 `~/.cx/deepseek.key`（权限 600）和 launchd 环境中，**不写入任何配置文件明文**，不外发。

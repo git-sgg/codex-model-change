@@ -13,7 +13,7 @@
 """
 import json, os, re, glob, sqlite3, subprocess, sys, shutil, time, urllib.request, urllib.error
 
-CX_VERSION = "1.0.4"
+CX_VERSION = "1.0.5"
 
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 CONFIG = os.path.join(CODEX_HOME, "config.toml")
@@ -152,6 +152,62 @@ def clean_ocx_injections(text):
             out.append(f'model_catalog_json = "{CATALOG}"'); continue
         out.append(ln)
     return "\n".join(out)
+
+
+# ---------- App 投影缓存对齐 ----------
+# 背景(踩过的坑,务必保留):
+#   rollout 每条记录带顶层 "ordinal" 字段,且 App 要求它从 0 起、逐条 +1 连续。
+#   cx fix-all 会两处改动 rollout:
+#     1) rewrite_rollout 重新序列化 turn_context/session_meta → 整文件字节偏移漂移;
+#     2) sanitize_rollout 删除 reasoning 行 → ordinal 出现缺口。
+#   而 App 的投影(thread_history_1.sqlite)按 ordinal + 字节偏移增量推进,一旦遇到缺口
+#   就永久卡死("expected ordinal N, got N+1"),新内容再也进不了投影缓存 ——
+#   表现就是"跑完 fix-all 后重开 App,今天聊的内容消失了"(live 会话内存里其实还在)。
+# 因此 fix-all 必须:先重编号 ordinal 消除缺口,再清掉该会话的投影缓存,
+#   让 App 下次打开时从(已连续的)rollout 完整重建。重建是唯一 100% 安全的做法。
+import re as _re
+_ORD_PAT = _re.compile(rb'"ordinal":\s*(\d+)')
+_ORD_SUB = _re.compile(rb'"ordinal":\s*\d+')
+
+def read_ordinals(path):
+    """按行序读出每行顶层 ordinal 值(缺失为 None)"""
+    out = []
+    for ln in open(path, "rb"):
+        m = _ORD_PAT.search(ln)
+        out.append(int(m.group(1)) if m else None)
+    return out
+
+def renumber_ordinals(path):
+    """把每行 ordinal 重写为行号,消除删行造成的缺口。返回改写行数。
+    正常 rollout 每行都有 ordinal 且原本 ordinal==行号,故以行号为准可完美复原连续性。"""
+    lines = open(path, "rb").readlines()
+    changed = 0
+    for i, ln in enumerate(lines):
+        new = _ORD_SUB.sub(b'"ordinal":' + str(i).encode(), ln, count=1)
+        if new != ln:
+            lines[i] = new; changed += 1
+    if changed:
+        open(path, "wb").writelines(lines)
+    return changed
+
+def reset_app_projection(thread_id):
+    """清掉 App 对某会话的投影缓存,强制其下次打开时从 rollout 重建。
+    rollout 被改写/删行后这是唯一安全做法:避免 ordinal 缺口与字节偏移错位残留。
+    (thread_history_projection_state 上有 DELETE 触发器,会连带清 thread_realtime_items)"""
+    db_path = os.path.join(CODEX_HOME, "thread_history_1.sqlite")
+    if not (thread_id and os.path.exists(db_path)):
+        return False
+    db = sqlite3.connect(db_path)
+    try:
+        has = lambda t: db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (t,)).fetchone()
+        for t in ("thread_items", "thread_turns", "thread_history_projection_state"):
+            if has(t):
+                db.execute(f"DELETE FROM {t} WHERE thread_id=?", (thread_id,))
+        db.commit()
+        return True
+    finally:
+        db.close()
 
 # ---------- 命令 ----------
 def cmd_use(which):
@@ -348,8 +404,14 @@ def cmd_fix_all():
         if rp and os.path.exists(rp):
             bakj = rp + f".bak.cx-fixall-{ts}"
             if not os.path.exists(bakj): shutil.copy2(rp, bakj)
+            old_ords = read_ordinals(rp)          # 改写前快照(仅用于诊断是否有缺口)
             if needs_model: rewrite_rollout(rp, model, provider)
             if provider == "openai": sanitize_rollout(rp)
+            # 关键:删行会产生 ordinal 缺口 + 重排会移动字节偏移;必须重编号消除缺口,
+            # 并清投影缓存让 App 从 rollout 重建,否则重开 App 后该会话内容会"消失"
+            fixed = renumber_ordinals(rp)
+            reset_app_projection(tid)
+            if fixed: print(f"  · {tid[:8]} 重编号 {fixed} 行并重置 App 投影")
         if needs_model:
             db.execute("UPDATE threads SET model=?, model_provider=? WHERE id=?", (model, provider, tid))
         n += 1
