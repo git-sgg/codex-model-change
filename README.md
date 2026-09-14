@@ -44,14 +44,14 @@ cd codex-model-change
 | 命令 | 作用 |
 |---|---|
 | `cx status` | 查看默认模型 / provider / 最近会话各自用的模型 |
-| `cx use deepseek` | 切换到 DeepSeek 直连（改写 `~/.codex/config.toml`，自动备份） |
+| `cx fix-all deepseek\|gpt` | **批量把所有老会话切换到目标模型**（需退 App）；切到 gpt 时自动清理旧代理遗留的不兼容历史条目（`reasoning.content` 等），避免续聊报 `Invalid 'input[..].content'` |
+| `cx fix-all deepseek --limit 10` | 只处理最近 10 个会话（`--limit` 可按需调整，省略则处理全部） |
+| `cx use deepseek` | 切换默认模型（**只对新会话生效**；改写 `~/.codex/config.toml`，自动备份） |
 | `cx use gpt` | 切回原生 ChatGPT（走 ChatGPT 登录态，无需 API key） |
 | `cx key <API_KEY>` | 保存 DeepSeek key 并注入 GUI 环境（桌面 App 需要） |
 | `cx doctor` | 体检：key 有效性 / 直连连通性 / 会话健康 |
 | `cx fix <会话ID>` | 修复某个打不开/报 404 的会话（ID 取 `cx status` 里显示的前 8 位即可） |
 | `cx fix last` | 修复最近一个会话 |
-| `cx fix-all <目标> [--limit N]` | **批量把所有老会话切换到目标模型**（`deepseek` 或 `gpt`，需退 App）；切到 gpt 时自动清理旧代理遗留的不兼容历史条目（`reasoning.content` 等），避免续聊报 `Invalid 'input[..].content'` |
-| `cx fix-all deepseek --limit 10` | 只处理最近 10 个会话（`--limit` 可按需调整，省略则处理全部） |
 
 **关于老会话**：每个会话记录着自己创建时的模型，`cx use` 只影响新会话——老会话继续用原模型，互不干扰。想把老会话搬到新模型：单个用 `cx fix`，全部用 `cx fix-all`（会先备份数据库和会话文件，确认后执行）。
 

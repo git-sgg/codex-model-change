@@ -3,17 +3,18 @@
 
 无代理、无常驻进程。Codex 直连 deepseek(Responses API) / 原生 ChatGPT。
 命令:
-  cx status            查看当前模型配置与最近会话
-  cx use deepseek|gpt  切换默认模型(改写 ~/.codex/config.toml, 自动备份)
-  cx doctor            体检: key/直连/会话健康
-  cx key <API_KEY>     保存 deepseek key 并注入 GUI 环境(launchctl setenv)
-  cx fix <会话ID>      修复单个会话(续跑一轮写入正确模型)
-  cx fix-all <目标>    把所有老会话批量切换到目标模型(需退 App)
-                       例: cx fix-all deepseek --limit 10 (只改最近 10 个)
+  cx status              查看当前模型配置与最近会话
+  cx fix-all deepseek|gpt
+                         把所有老会话批量切换到目标模型(需退 App)
+                         例: cx fix-all deepseek --limit 10 (只改最近 10 个)
+  cx use deepseek|gpt    切换默认模型(只针对新会话生效)
+  cx doctor              体检: key/直连/会话健康
+  cx key <API_KEY>       保存 deepseek key 并注入 GUI 环境(launchctl setenv)
+  cx fix <会话ID>        修复单个会话(续跑一轮写入正确模型)
 """
 import json, os, re, glob, sqlite3, subprocess, sys, shutil, time, urllib.request, urllib.error
 
-CX_VERSION = "1.0.6"
+CX_VERSION = "1.0.7"
 
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 CONFIG = os.path.join(CODEX_HOME, "config.toml")
@@ -41,13 +42,13 @@ HELP = """cx — Codex 模型直连切换器
 
 命令一览:
   status               查看默认模型/provider/最近会话(不带参数执行 cx 等同于此)
-  use deepseek|gpt     切换默认模型(改写 config.toml,自动备份)
+  fix-all deepseek|gpt 批量把所有老会话切换到目标模型(需退 App)
+                       用法: cx fix-all deepseek|gpt [--limit N]
+                       例: cx fix-all deepseek --limit 10 (只改最近 10 个)
+  use deepseek|gpt     切换默认模型(只针对新会话生效)
   key <API_KEY>        保存 deepseek key 并注入 GUI 环境(桌面 App 需要)
   doctor               体检: key 有效性/直连连通性/会话健康
   fix <会话ID|last>    修复单个会话(ID 取 status 里显示的前 8 位即可)
-  fix-all <目标>       批量把所有老会话切换到目标模型(需退 App)
-                       用法: cx fix-all deepseek|gpt [--limit N]
-                       例: cx fix-all deepseek --limit 10 (只改最近 10 个)
   version              显示 cx 版本
   help                 显示本帮助
 
