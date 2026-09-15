@@ -147,9 +147,9 @@ App 没读到 `DEEPSEEK_API_KEY`。执行上面「桌面 App 的一次性配置�
 
 - macOS（依赖 `launchctl` 做 GUI 环境变量注入；纯 CLI 使用则不依赖）
 - Codex CLI / ChatGPT 桌面 App（内含 codex 的版本）
-- DeepSeek `deepseek-chat` / `deepseek-reasoner`（Responses API）
+- DeepSeek `deepseek-flash` / `deepseek-v4-pro`（Responses API；旧名 `deepseek-chat` / `deepseek-reasoner` 仍可调用，会转到 Flash）
 
-> 注意：DeepSeek 的上下文窗口（128K 级）与 GPT 不同，cx 生成的模型目录已按 DeepSeek 实际参数配置（截断策略、auto-compact 阈值等），请勿手工改坏后不带备份地覆盖。
+> 注意：DeepSeek 当前模型的官方上下文为 **1M**、最大输出 384K（V3.1 时代的 `deepseek-chat` / `deepseek-reasoner` 才是 128K 级）。cx 生成的模型目录目前仍按 128K 窗口配置（截断策略、auto-compact 阈值等），想用满 1M 可自行调整——请勿手工改坏后不带备份地覆盖。
 
 ## License
 
