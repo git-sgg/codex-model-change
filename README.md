@@ -85,7 +85,7 @@ env_key = "DEEPSEEK_API_KEY"
 wire_api = "responses"
 ```
 
-并把顶部改为 `model_provider = "deepseek"` / `model = "deepseek-chat"`，同时生成模型目录 `~/.codex/cx-catalog.json`。
+并把顶部改为 `model_provider = "deepseek"` / `model = "deepseek-flash"`，同时生成模型目录 `~/.codex/cx-catalog.json`。
 
 **第 4 步：完成桌面 App 配置**（见下方「桌面 App 的一次性配置」），然后完全退出并重开 App。
 
@@ -147,9 +147,9 @@ App 没读到 `DEEPSEEK_API_KEY`。执行上面「桌面 App 的一次性配置�
 
 - macOS（依赖 `launchctl` 做 GUI 环境变量注入；纯 CLI 使用则不依赖）
 - Codex CLI / ChatGPT 桌面 App（内含 codex 的版本）
-- DeepSeek `deepseek-flash` / `deepseek-v4-pro`（Responses API；旧名 `deepseek-chat` / `deepseek-reasoner` 仍可调用，会转到 Flash）
+- DeepSeek `deepseek-flash`（V4.1，默认）/ `deepseek-v4-pro`（Responses API）
 
-> 注意：DeepSeek 当前模型的官方上下文为 **1M**、最大输出 384K（V3.1 时代的 `deepseek-chat` / `deepseek-reasoner` 才是 128K 级）。cx 生成的模型目录目前仍按 128K 窗口配置（截断策略、auto-compact 阈值等），想用满 1M 可自行调整——请勿手工改坏后不带备份地覆盖。
+> 上下文：cx 生成的模型目录按官方 **1M** 窗口配置（`context_window = 1048576`、auto-compact 阈值 900K、最大输出 384K），对应官方 **DeepSeek-V4** 系列。V3.1 时代的 `deepseek-chat` / `deepseek-reasoner` 只有 128K 级，且已被服务端当作兼容别名静默指向 `deepseek-flash`；**cx 1.0.8 起不再使用这两个旧名**（如账号可用的模型名有变化，`cx doctor` 会告警）。
 
 ## License
 

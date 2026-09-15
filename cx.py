@@ -14,7 +14,7 @@
 """
 import json, os, re, glob, sqlite3, subprocess, sys, shutil, time, urllib.request, urllib.error
 
-CX_VERSION = "1.0.7"
+CX_VERSION = "1.0.8"
 
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 CONFIG = os.path.join(CODEX_HOME, "config.toml")
@@ -24,7 +24,7 @@ CATALOG = os.path.join(CODEX_HOME, "cx-catalog.json")
 CODEX_BIN = "/opt/homebrew/bin/codex"
 APP_PGREP = "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"
 
-DS_MODEL = "deepseek-chat"
+DS_MODEL = "deepseek-flash"   # V4.1-Flash;旧的 deepseek-chat/deepseek-reasoner 已被服务端别名到它,不再使用
 DS_PROVIDER_BLOCK = """
 # --- added by cx (direct deepseek) ---
 [model_providers.deepseek]
@@ -61,6 +61,7 @@ HELP = """cx — Codex 模型直连切换器
 def err(m): print("❌ " + m); sys.exit(1)
 def ok(m): print("✅ " + m)
 def info(m): print("ℹ️  " + m)
+def warn(m): print("⚠️  " + m)
 
 def read_cfg():
     if not os.path.exists(CONFIG): err(f"找不到 {CONFIG}")
@@ -78,7 +79,7 @@ def load_key():
     return open(KEY_FILE).read().strip() or None
 
 # ---------- 目录文件 ----------
-def _ds_entry(slug, name, desc, priority):
+def _ds_entry(slug, name, desc, priority, ctx=1048576, compact=900000):
     return {
         "slug": slug, "display_name": name, "description": desc,
         "default_reasoning_level": "high",
@@ -99,21 +100,19 @@ def _ds_entry(slug, name, desc, priority):
         "supports_search_tool": False, "tool_mode": "default",
         "node_repl_disabled": True, "node_repl_auto_review_required": False,
         "include_plugin_usage_instructions": False, "include_apps_usage_instructions": False,
-        "supports_reasoning_summaries": False, "context_window": 131072,
-        "max_context_window": 131072, "auto_compact_token_limit": 118000,
+        "supports_reasoning_summaries": False, "context_window": ctx,
+        "max_context_window": ctx, "auto_compact_token_limit": compact,
         "auto_review_model_override": None,
     }
 
 CATALOG_MODELS = [
-    _ds_entry("deepseek-chat", "DeepSeek Chat", "DeepSeek 直连 (deepseek-chat)。", 5),
-    _ds_entry("deepseek-reasoner", "DeepSeek Reasoner", "DeepSeek 直连 (deepseek-reasoner)。", 4),
+    _ds_entry("deepseek-flash", "DeepSeek Flash", "DeepSeek 直连 (deepseek-flash / V4.1, 1M 上下文)。", 5),
+    _ds_entry("deepseek-v4-pro", "DeepSeek V4 Pro", "DeepSeek 直连 (deepseek-v4-pro, 1M 上下文)。", 4),
 ]
 for slug in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"):
-    e = _ds_entry(slug, slug, slug, 1)
+    e = _ds_entry(slug, slug, slug, 1, ctx=400000, compact=360000)
     e["visibility"] = "hide"
     e["input_modalities"] = ["text", "image"]
-    e["context_window"] = e["max_context_window"] = 400000
-    e["auto_compact_token_limit"] = 360000
     e["supports_reasoning_summaries"] = True
     CATALOG_MODELS.append(e)
 
@@ -291,7 +290,18 @@ def cmd_doctor():
         req = urllib.request.Request("https://api.deepseek.com/v1/models",
                                      headers={"Authorization": f"Bearer {key}"})
         try:
-            urllib.request.urlopen(req, timeout=10); ok("deepseek API 直连: key 有效")
+            with urllib.request.urlopen(req, timeout=10) as r:
+                ids = [m.get("id") for m in json.load(r).get("data", []) if m.get("id")]
+            ok("deepseek API 直连: key 有效")
+            if ids:
+                info("账号可用模型: " + ", ".join(ids))
+                gone = [m["slug"] for m in CATALOG_MODELS
+                        if m.get("slug", "").startswith("deepseek") and m["slug"] not in ids]
+                if gone:
+                    warn("模型目录里这些名字已不在账号可用列表: " + ", ".join(gone)
+                         + "  (运行 cx use deepseek 重建目录,或升级 cx)")
+                else:
+                    ok("模型目录中的 deepseek 模型名均可用")
         except urllib.error.HTTPError as e:
             err(f"deepseek API 返回 {e.code}(key 可能无效)")
         except Exception as e:
