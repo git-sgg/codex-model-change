@@ -137,6 +137,23 @@ App 没读到 `DEEPSEEK_API_KEY`。执行上面「桌面 App 的一次性配置�
 若用的是 1.0.5 之前的版本且已中招：升级后**完全退出 App**，再重新打开该会话即可恢复；
 仍不显示时，可手动删掉 `~/.codex/thread_history_1.sqlite` 中对应 `thread_id` 的行，强制其重建。
 
+**Q: 切到 deepseek 后发消息报 `No tool output found for tool call call_xxx`（400，会话卡死）？**
+
+Codex 用 `view_image` 看图片时会**连续发起多个调用**，并在每条图片结果之后插入一条 `role=developer`
+的 `<image_resize_notice>` 提示（"Image N of N ... was resized ..."）。DeepSeek 的 Responses API 在
+「多个 tool call 连续出现 + 结果之间夹着 message」这种组合下会**丢失配对**，于是报
+`No tool output found for tool call ...`，该会话从此发不出消息（与 `cx` 本身无关，是 Codex 的历史
+组装方式在 DeepSeek 侧的兼容问题）。
+
+1.0.9 已修复：`cx fix <会话UUID>` 与 `cx fix-all deepseek` 会先删掉这些纯提示性质的 notice 消息
+（**只删缩放提示，工具调用记录与对话内容全部保留**），再重编号 `ordinal` 并重置投影缓存。
+
+已中招的会话：升级到 1.0.9 → **完全退出 App** → `cx fix <会话UUID>`（或 `cx fix-all deepseek`）→ 重开 App。
+
+> 注意：之后若又在 deepseek 会话里让 Codex 看图（再次触发 `view_image`），会重新产生这类提示消息，
+> 可能再次报同样的错——再跑一次 `cx fix` 即可。排查手法：把该会话的请求体抓下来，删除
+> `image_resize_notice` 消息后回放即 200。
+
 ## 隐私说明
 
 - API key 仅保存在本机 `~/.cx/deepseek.key`（权限 600）和 launchd 环境中，**不写入任何配置文件明文**，不外发。

@@ -14,7 +14,7 @@
 """
 import json, os, re, glob, sqlite3, subprocess, sys, shutil, time, urllib.request, urllib.error
 
-CX_VERSION = "1.0.8"
+CX_VERSION = "1.0.9"
 
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 CONFIG = os.path.join(CODEX_HOME, "config.toml")
@@ -48,7 +48,7 @@ HELP = """cx — Codex 模型直连切换器
   use deepseek|gpt     切换默认模型(只针对新会话生效)
   key <API_KEY>        保存 deepseek key 并注入 GUI 环境(桌面 App 需要)
   doctor               体检: key 有效性/直连连通性/会话健康
-  fix <会话ID|last>    修复单个会话(ID 取 status 里显示的前 8 位即可)
+  fix <会话ID|last>    修复单个会话:清理不兼容历史条目 + 续跑一轮(ID 取 status 前 8 位)
   version              显示 cx 版本
   help                 显示本帮助
 
@@ -320,6 +320,15 @@ def cmd_fix():
         sid = r[0]
     if app_running(): err("请先完全退出 ChatGPT/Codex App(会话被锁)")
     print(f"修复会话 {sid} ...")
+    # 先就地清理 rollout:删掉会让 DeepSeek 报 "No tool output found" 的 image_resize_notice
+    rp = rollout_path_of(sid)
+    if rp and os.path.exists(rp):
+        shutil.copy2(rp, rp + ".bak.cx-fix-" + time.strftime("%Y%m%d-%H%M%S"))
+        stripped = strip_resize_notices(rp)
+        fixed = renumber_ordinals(rp)
+        if stripped or fixed:
+            reset_app_projection(sid)
+            print(f"  · 清理 {stripped} 条不兼容条目 / 重编号 {fixed} 行,已重置 App 投影")
     r = subprocess.run([CODEX_BIN, "exec", "resume", "--skip-git-repo-check",
                         "-c", f'model="{DS_MODEL}"', "-c", 'model_provider="deepseek"',
                         sid, "系统测试:请只回复两个字[正常]"],
@@ -348,6 +357,43 @@ def sanitize_rollout(path):
     if removed:
         open(path, "w", encoding="utf-8").writelines(out)
     return removed
+
+def strip_resize_notices(path):
+    """删除 Codex 在 view_image 之后自动插入的 role=developer 的 <image_resize_notice> 消息。
+
+    背景:Codex 连续发起多个 view_image 调用时,每条 output 后面会跟一条 developer 提示
+    ("Image 1 of 1 in the preceding tool output was resized ...")。DeepSeek 的 Responses API
+    在「多个 tool call 连续出现 + output 之间夹 message」这种组合下会丢失配对,
+    报 `No tool output found for tool call <id>`(400,会话卡死无法继续)。
+    这些 notice 只是缩放提示、无实质内容,删掉即可(保留全部 call/output,不丢对话)。
+    返回删除条数。"""
+    removed = 0
+    keep = []
+    for ln in open(path, "rb"):
+        if b"image_resize_notice" in ln:
+            try:
+                d = json.loads(ln)
+            except Exception:
+                keep.append(ln); continue
+            pl = d.get("payload") or {}
+            if (d.get("type") == "response_item" and pl.get("type") == "message"
+                    and pl.get("role") == "developer"):
+                removed += 1
+                continue
+        keep.append(ln)
+    if removed:
+        open(path, "wb").writelines(keep)
+    return removed
+
+def rollout_path_of(tid):
+    """按 thread id 取 rollout 文件路径"""
+    try:
+        db = sqlite3.connect(f"file:{CODEX_HOME}/state_5.sqlite?mode=ro", uri=True)
+        r = db.execute("SELECT rollout_path FROM threads WHERE id=?", (tid,)).fetchone()
+        db.close()
+        return r[0] if r else None
+    except Exception:
+        return None
 
 def rewrite_rollout(path, model, provider):
     """把 rollout 文件里记录的模型/provider 统一改写为指定值,返回是否修改"""
@@ -396,8 +442,10 @@ def cmd_fix_all():
     todo = []
     for tid, m, p, rp in rows:
         needs_model = (m != model or p != provider)
-        # 清洗判断不能只扫文件前缀:脏条目可能埋在大会话深处,只要目标是 openai 就全量清洗(幂等)
-        needs_sanitize = (provider == "openai" and rp and os.path.exists(rp))
+        # 清洗判断不能只扫文件前缀:脏条目可能埋在大会话深处,两种目标都全量清洗(均幂等)
+        # - openai  : 移除旧代理时代留下的 reasoning 脏条目
+        # - deepseek: 移除 image_resize_notice(否则报 No tool output found,会话卡死)
+        needs_sanitize = bool(rp and os.path.exists(rp))
         if needs_model or needs_sanitize:
             todo.append((tid, m, p, rp, needs_model))
     if not todo:
@@ -415,13 +463,14 @@ def cmd_fix_all():
         if rp and os.path.exists(rp):
             bakj = rp + f".bak.cx-fixall-{ts}"
             if not os.path.exists(bakj): shutil.copy2(rp, bakj)
-            old_ords = read_ordinals(rp)          # 改写前快照(仅用于诊断是否有缺口)
             if needs_model: rewrite_rollout(rp, model, provider)
-            if provider == "openai": sanitize_rollout(rp)
+            stripped = sanitize_rollout(rp) if provider == "openai" else strip_resize_notices(rp)
             # 关键:删行会产生 ordinal 缺口 + 重排会移动字节偏移;必须重编号消除缺口,
             # 并清投影缓存让 App 从 rollout 重建,否则重开 App 后该会话内容会"消失"
             fixed = renumber_ordinals(rp)
-            reset_app_projection(tid)
+            if needs_model or stripped or fixed:
+                reset_app_projection(tid)
+            if stripped: print(f"  · {tid[:8]} 清理 {stripped} 条不兼容条目")
             if fixed: print(f"  · {tid[:8]} 重编号 {fixed} 行并重置 App 投影")
         if needs_model:
             db.execute("UPDATE threads SET model=?, model_provider=? WHERE id=?", (model, provider, tid))
