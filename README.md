@@ -53,7 +53,7 @@ cx setup sk-xxxxxxxx        # 一条命令完成:存 key → 写 config → 生�
 
 - **CLI** 直接可用：`codex "你的问题"`
 - **桌面 App**：完全退出重开即可。若首次弹出登录页，选 *Sign in another way*；配置好自定义 provider 后通常可直接选项目开始使用（无需 ChatGPT 账号）。桌面 App 需要环境变量里的 key，`cx setup` 已通过 `launchctl` 注入并由 LaunchAgent 在重启后自动恢复
-- 已有历史会话想一并切换：`cx fix-all deepseek`（需先完全退出 App）
+- 已有历史会话想一并切换：`cx fix-all deepseek`（**会自动退出并重开 App**，无需手动操作）
 
 ## 命令
 
@@ -61,7 +61,7 @@ cx setup sk-xxxxxxxx        # 一条命令完成:存 key → 写 config → 生�
 |---|---|
 | `cx setup <API_KEY>` | **全新机器一键接入**：存 key + 写配置 + 生成模型目录 + 冒烟测试（无需 ChatGPT 账号） |
 | `cx status` | 查看默认模型 / provider / 最近会话各自用的模型 |
-| `cx fix-all deepseek\|gpt` | **批量把所有老会话切换到目标模型**（需退 App）；切到 gpt 时自动清理旧代理遗留的不兼容历史条目（`reasoning.content` 等），避免续聊报 `Invalid 'input[..].content'` |
+| `cx fix-all deepseek\|gpt` | **批量把所有老会话切换到目标模型**（自动退出 App，完事自动重开）；切到 gpt 时自动清理旧代理遗留的不兼容历史条目（`reasoning.content` 等），避免续聊报 `Invalid 'input[..].content'` |
 | `cx fix-all deepseek --limit 10` | 只处理最近 10 个会话（`--limit` 可按需调整，省略则处理全部） |
 | `cx use deepseek` | 切换默认模型（**只对新会话生效**；改写 `~/.codex/config.toml`，自动备份） |
 | `cx use gpt` | 切回原生 ChatGPT（走 ChatGPT 登录态，无需 API key） |
@@ -104,7 +104,7 @@ wire_api = "responses"
 
 并把顶部改为 `model_provider = "deepseek"` / `model = "deepseek-flash"`，同时生成模型目录 `~/.codex/cx-catalog.json`。
 
-**第 4 步：完成桌面 App 配置**（见下方「桌面 App 的一次性配置」），然后完全退出并重开 App。
+**第 4 步：完成桌面 App 配置**（见下方「桌面 App 的一次性配置」）。之后 `cx use` / `cx fix` / `cx fix-all` 都会**自动退出并重开 App**，无需手动 ⌘Q。
 
 验证：跑 `cx doctor`，三项全 ✅ 即配置成功；或在 App 里发条消息试试。
 
@@ -120,14 +120,14 @@ launchctl setenv DEEPSEEK_API_KEY "$(cat ~/.cx/deepseek.key)"
 
 `cx key` 会自动装一个 LaunchAgent（`~/Library/LaunchAgents/com.cx.codex-setenv.plist`），**下次重启登录时自动完成上述注入**，所以手动只需执行一次。
 
-之后**完全退出并重开 Codex App** 即可。App 的模型选择器里会出现 DeepSeek Chat / DeepSeek Reasoner。
+之后 `cx use deepseek` 会**自动退出并重开 Codex App**（想手动操作也行：⌘Q 再打开）。App 的模型选择器里会出现 DeepSeek Flash / DeepSeek V4 Pro。
 
-> **从其它代理工具迁移过来的用户**：如果你的老会话记录的是代理别名（如 `deepseek/deepseek-v4-flash`），直连后无法续聊。先完全退出 App，然后执行 `cx fix-all deepseek` 一次性把所有会话迁移为直连格式。
+> **从其它代理工具迁移过来的用户**：如果你的老会话记录的是代理别名（如 `deepseek/deepseek-v4-flash`），直连后无法续聊。直接执行 `cx fix-all deepseek`，它会自动退出 App、迁移完毕后自动重开。
 
 ## 常见问题
 
 **Q: 切换/迁移后 App 里还是报错？**
-桌面 App 启动时读取配置，必须**完全退出**（⌘Q，不是关窗口）再打开。
+桌面 App 启动时读取配置，必须**完全退出**（⌘Q，不是关窗口）再打开。`cx use` / `cx fix` / `cx fix-all` 默认会代劳这件事；想自己控制加 `--no-reopen`（改完不重开）或 `--keep-app`（完全不动 App，在运行则报错）。
 
 **Q: 终端里 codex 能用，桌面 App 报 key 错误？**
 App 没读到 `DEEPSEEK_API_KEY`。执行上面「桌面 App 的一次性配置」后重启 App。
