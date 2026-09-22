@@ -37,12 +37,29 @@ cd codex-model-change
 # 或指定位置: ./install.sh /opt/homebrew/bin/cx
 ```
 
-前置要求：已安装 [OpenAI Codex CLI](https://github.com/openai/codex)（`brew install codex`）并至少成功运行过一次（`~/.codex/config.toml` 存在）。
+前置要求：已安装 [OpenAI Codex CLI](https://github.com/openai/codex)（`brew install codex`）。**无 ChatGPT 账号也可以**，见下节。
+
+## 全新机器一键接入（无需 ChatGPT 账号/登录）
+
+只在 [DeepSeek 开放平台](https://platform.deepseek.com) 申请一个 API key，然后：
+
+```bash
+cx setup sk-xxxxxxxx        # 一条命令完成:存 key → 写 config → 生成模型目录 → CLI 冒烟测试
+```
+
+适用场景：新机器只装了 Codex、从没用 ChatGPT 账号登录过（没有 `~/.codex/auth.json`）。`cx setup` 会从零生成全部配置，实测无登录态也能正常对话。
+
+之后：
+
+- **CLI** 直接可用：`codex "你的问题"`
+- **桌面 App**：完全退出重开即可。若首次弹出登录页，选 *Sign in another way*；配置好自定义 provider 后通常可直接选项目开始使用（无需 ChatGPT 账号）。桌面 App 需要环境变量里的 key，`cx setup` 已通过 `launchctl` 注入并由 LaunchAgent 在重启后自动恢复
+- 已有历史会话想一并切换：`cx fix-all deepseek`（需先完全退出 App）
 
 ## 命令
 
 | 命令 | 作用 |
 |---|---|
+| `cx setup <API_KEY>` | **全新机器一键接入**：存 key + 写配置 + 生成模型目录 + 冒烟测试（无需 ChatGPT 账号） |
 | `cx status` | 查看默认模型 / provider / 最近会话各自用的模型 |
 | `cx fix-all deepseek\|gpt` | **批量把所有老会话切换到目标模型**（需退 App）；切到 gpt 时自动清理旧代理遗留的不兼容历史条目（`reasoning.content` 等），避免续聊报 `Invalid 'input[..].content'` |
 | `cx fix-all deepseek --limit 10` | 只处理最近 10 个会话（`--limit` 可按需调整，省略则处理全部） |

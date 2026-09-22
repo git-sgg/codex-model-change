@@ -14,7 +14,7 @@
 """
 import json, os, re, glob, sqlite3, subprocess, sys, shutil, time, urllib.request, urllib.error
 
-CX_VERSION = "1.0.9"
+CX_VERSION = "1.0.10"
 
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 CONFIG = os.path.join(CODEX_HOME, "config.toml")
@@ -64,10 +64,12 @@ def info(m): print("ℹ️  " + m)
 def warn(m): print("⚠️  " + m)
 
 def read_cfg():
-    if not os.path.exists(CONFIG): err(f"找不到 {CONFIG}")
+    if not os.path.exists(CONFIG):
+        return ""   # 全新机器:尚未生成 config.toml,当空配置处理
     return open(CONFIG, encoding="utf-8").read()
 
 def backup_cfg(tag=""):
+    if not os.path.exists(CONFIG): return None
     ts = time.strftime("%Y%m%d-%H%M%S")
     dst = f"{CONFIG}.bak.cx-{tag}{ts}"
     shutil.copy2(CONFIG, dst)
@@ -140,6 +142,16 @@ def set_active_model(text, model, provider):
         else:
             text = text.replace('model = ', f'model_provider = "{provider}"\nmodel = ', 1)
     return text
+
+def ensure_catalog_key(text):
+    """保证顶层 model_catalog_json 指向 cx 目录。必须插在首个 [table] 头之前,否则会被 TOML 归入表内而失效。"""
+    if re.search(r"(?m)^model_catalog_json\s*=", text):
+        return text
+    line = f'model_catalog_json = "{CATALOG}"\n'
+    m = re.search(r"(?m)^\[", text)
+    if m:
+        return text[:m.start()] + line + "\n" + text[m.start():]
+    return text.rstrip() + "\n\n" + line
 
 def clean_ocx_injections(text):
     lines, out = text.split("\n"), []
@@ -217,29 +229,19 @@ def cmd_use(which):
     if which == "deepseek":
         text = ensure_provider_block(text)
         text = set_active_model(text, DS_MODEL, "deepseek")
+        text = ensure_catalog_key(text)
     else:
         text = set_active_model(text, GPT_MODEL, "openai")
     text = clean_ocx_injections(text)
     write_catalog()
+    os.makedirs(CODEX_HOME, exist_ok=True)
     open(CONFIG, "w", encoding="utf-8").write(text)
     ok(f"已切换到 {which}: model 已写入,备份在同目录")
     if which == "deepseek" and not load_key():
         info("未保存 deepseek key,先运行: cx key <API_KEY>")
     info("桌面 App 需完全退出重开才会重读配置")
 
-def cmd_key():
-    key = None
-    if len(sys.argv) > 2 and sys.argv[2].strip():
-        key = sys.argv[2].strip()
-    else:
-        # 尝试从 ocx 配置迁移
-        ocx = os.path.expanduser("~/.opencodex/config.json")
-        if os.path.exists(ocx):
-            try:
-                key = json.load(open(ocx))["providers"]["deepseek"]["apiKey"]
-                info(f"从旧代理配置(~/.opencodex)读取到 key({key[:8]}...)")
-            except Exception: pass
-    if not key: err("用法: cx key <DEEPSEEK_API_KEY>")
+def save_key(key):
     os.makedirs(CX_DIR, exist_ok=True)
     os.chmod(CX_DIR, 0o700)
     open(KEY_FILE, "w").write(key); os.chmod(KEY_FILE, 0o600)
@@ -259,6 +261,51 @@ def cmd_key():
     open(plist, "w").write(pl); os.chmod(plist, 0o600)
     ok("key 已保存(~/.cx/deepseek.key)并注入 GUI 环境(重启后由 LaunchAgent 自动恢复)")
     info("正在运行的 App 需重启才能看到该环境变量")
+
+def cmd_key():
+    key = None
+    if len(sys.argv) > 2 and sys.argv[2].strip():
+        key = sys.argv[2].strip()
+    else:
+        # 尝试从 ocx 配置迁移
+        ocx = os.path.expanduser("~/.opencodex/config.json")
+        if os.path.exists(ocx):
+            try:
+                key = json.load(open(ocx))["providers"]["deepseek"]["apiKey"]
+                info(f"从旧代理配置(~/.opencodex)读取到 key({key[:8]}...)")
+            except Exception: pass
+    if not key: err("用法: cx key <DEEPSEEK_API_KEY>")
+    save_key(key)
+
+def cmd_setup():
+    """全新机器一键接入:只有 codex、没有 GPT 登录也能用上 DeepSeek。"""
+    key = sys.argv[2].strip() if len(sys.argv) > 2 and sys.argv[2].strip() else load_key()
+    if not key: err("用法: cx setup <DEEPSEEK_API_KEY>")
+    if not os.path.exists(CODEX_BIN):
+        err(f"未找到 codex({CODEX_BIN})。先安装: brew install codex 或 npm i -g @openai/codex")
+    print(f"== cx setup: 为无 GPT 登录的全新环境接入 DeepSeek ==")
+    save_key(key)
+    # config.toml 不存在也能跑(read_cfg 返回空),use 内部会创建并写入完整配置
+    cmd_use("deepseek")
+    print()
+    print("== 端到端冒烟测试(CLI 直连 DeepSeek) ==")
+    env = dict(os.environ, DEEPSEEK_API_KEY=key)
+    try:
+        r = subprocess.run([CODEX_BIN, "exec", "--skip-git-repo-check", "只回复ok"],
+                           env=env, cwd="/tmp", capture_output=True, text=True, timeout=120)
+        out = (r.stdout or "") + (r.stderr or "")
+        if r.returncode == 0 and "ok" in out.lower():
+            ok("冒烟测试通过: 无 GPT 登录也能正常对话 ✅")
+        else:
+            err(f"冒烟测试失败(exit={r.returncode}): {out.strip()[-400:]}")
+    except subprocess.TimeoutExpired:
+        err("冒烟测试超时(120s),检查网络或代理后重试 cx doctor")
+    print()
+    print("完成! 接下来:")
+    print("  · CLI 现在就能用: codex \"你的问题\"")
+    print("  · 桌面 App: 完全退出重开即可。若首次弹出登录页,选 Sign in another way;")
+    print("    配置好自定义 provider 后通常可直接选项目开始用(无需 ChatGPT 账号)")
+    print("  · 想把旧会话也切过来: cx fix-all deepseek")
 
 def app_running():
     return subprocess.run(["pgrep", "-f", APP_PGREP], capture_output=True).returncode == 0
@@ -482,6 +529,7 @@ def main():
     if len(sys.argv) < 2: cmd_status(); return
     c = sys.argv[1]
     if c == "status": cmd_status()
+    elif c == "setup": cmd_setup()
     elif c == "use": cmd_use(sys.argv[2] if len(sys.argv) > 2 else "")
     elif c == "key": cmd_key()
     elif c == "doctor": cmd_doctor()
