@@ -41,6 +41,7 @@ HELP = """cx — Codex 模型直连切换器
 用法: cx <命令> [参数]
 
 命令一览:
+  setup <API_KEY>      全新机器一键接入 DeepSeek(无需 GPT 账号/登录,含冒烟测试)
   status               查看默认模型/provider/最近会话(不带参数执行 cx 等同于此)
   fix-all deepseek|gpt 批量把所有老会话切换到目标模型(需退 App)
                        用法: cx fix-all deepseek|gpt [--limit N]
