@@ -61,7 +61,7 @@ cx setup sk-xxxxxxxx        # 一条命令完成:存 key → 写 config → 生�
 |---|---|
 | `cx setup <API_KEY>` | **全新机器一键接入**：存 key + 写配置 + 生成模型目录 + 冒烟测试（无需 ChatGPT 账号） |
 | `cx status` | 查看默认模型 / provider / 最近会话各自用的模型 |
-| `cx fix-all deepseek\|gpt` | **批量把所有老会话切换到目标模型**（自动退出 App，完事自动重开）；切到 gpt 时自动清理旧代理遗留的不兼容历史条目（`reasoning.content` 等），避免续聊报 `Invalid 'input[..].content'` |
+| `cx fix-all deepseek\|gpt` | **批量把所有老会话切换到目标模型**（自动退出 App，完事自动重开）；切到 gpt 时自动清理旧代理遗留的不兼容历史条目（`reasoning.content` 等），避免续聊报 `Invalid 'input[..].content'`；切到 deepseek 时补全退化的 `web_search_call` 条目（缺 `url`/`queries`），避免续聊报 `422 missing field url` |
 | `cx fix-all deepseek --limit 10` | 只处理最近 10 个会话（`--limit` 可按需调整，省略则处理全部） |
 | `cx use deepseek` | 切换默认模型（**只对新会话生效**；改写 `~/.codex/config.toml`，自动备份） |
 | `cx use gpt` | 切回原生 ChatGPT（走 ChatGPT 登录态，无需 API key） |
@@ -170,6 +170,26 @@ Codex 用 `view_image` 看图片时会**连续发起多个调用**，并在每�
 > 注意：之后若又在 deepseek 会话里让 Codex 看图（再次触发 `view_image`），会重新产生这类提示消息，
 > 可能再次报同样的错——再跑一次 `cx fix` 即可。排查手法：把该会话的请求体抓下来，删除
 > `image_resize_notice` 消息后回放即 200。
+
+**Q: 切到 deepseek 后发消息报 `422 ... input: missing field url`（会话卡死）？**
+
+老会话如果在 GPT 时期用过联网搜索，历史里可能留下一条**退化的 `web_search_call`**——`action` 是空对象：
+
+```json
+{"type":"web_search_call","status":"completed","action":{"type":"open_page"}}
+```
+
+DeepSeek 的 `action` 是严格枚举，必需字段缺一不可：`search` 要 `query` + `queries`，`open_page` 要 `url`，
+`find_in_page` 要 `url` + `pattern`。缺字段时**整个请求在反序列化阶段就被拒**——所以报的是 422
+`Failed to deserialize the JSON body`，而不是普通的业务报错，该会话从此一条消息都发不出去。
+
+1.0.12 已修复：`cx fix <会话UUID>` 与 `cx fix-all` 会**补全**这类条目（缺 `url` 补 `about:blank`，缺 `queries`
+按 `query` 生成）。**只补字段、不删行**，所以不产生 `ordinal` 缺口；随后照例重置投影缓存。
+
+已中招的会话：升级到 1.0.12 → **完全退出 App** → `cx fix <会话UUID>`（或 `cx fix-all deepseek`）→ 重开 App。
+
+> 排查要点：422 是 DeepSeek 侧反序列化失败，与本机额度、会话写锁、`cx` 配置都无关，别往那些方向修。
+> 用 `curl` 直接打 `https://api.deepseek.com/v1/responses`、`input` 里塞一条可疑条目即可复现/定位。
 
 ## 隐私说明
 

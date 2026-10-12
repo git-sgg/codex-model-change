@@ -5,16 +5,16 @@
 命令:
   cx status              查看当前模型配置与最近会话
   cx fix-all deepseek|gpt
-                         把所有老会话批量切换到目标模型(需退 App)
+                         把所有老会话批量切到目标模型 + 清理历史兼容问题(需退 App)
                          例: cx fix-all deepseek --limit 10 (只改最近 10 个)
   cx use deepseek|gpt    切换默认模型(只针对新会话生效)
   cx doctor              体检: key/直连/会话健康
   cx key <API_KEY>       保存 deepseek key 并注入 GUI 环境(launchctl setenv)
-  cx fix <会话ID>        修复单个会话(续跑一轮写入正确模型)
+  cx fix <会话ID>        修复单个会话(清理不兼容历史条目,续跑一轮写入正确模型)
 """
 import json, os, re, glob, sqlite3, subprocess, sys, shutil, time, urllib.request, urllib.error
 
-CX_VERSION = "1.0.11"
+CX_VERSION = "1.0.12"
 
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 CONFIG = os.path.join(CODEX_HOME, "config.toml")
@@ -48,13 +48,13 @@ HELP = """cx — Codex 模型直连切换器
 命令一览:
   setup <API_KEY>      全新机器一键接入 DeepSeek(无需 GPT 账号/登录,含冒烟测试)
   status               查看默认模型/provider/最近会话(不带参数执行 cx 等同于此)
-  fix-all deepseek|gpt 批量把所有老会话切换到目标模型(自动退出 App,完事自动重开)
+  fix-all deepseek|gpt 批量把所有老会话切换到目标模型 + 清理历史兼容问题(自动退出 App,完事自动重开)
                        用法: cx fix-all deepseek|gpt [--limit N]
                        例: cx fix-all deepseek --limit 10 (只改最近 10 个)
   use deepseek|gpt     切换默认模型(只针对新会话生效;自动退出并重开 App)
   key <API_KEY>        保存 deepseek key 并注入 GUI 环境(桌面 App 需要)
   doctor               体检: key 有效性/直连连通性/会话健康
-  fix <会话ID|last>    修复单个会话:清理不兼容历史条目 + 续跑一轮(ID 取 status 前 8 位)
+  fix <会话ID|last>    修复单个会话:清理不兼容历史条目(含退化 web_search)+ 续跑一轮
   version              显示 cx 版本
   help                 显示本帮助
 
@@ -440,10 +440,14 @@ def cmd_fix():
     if rp and os.path.exists(rp):
         shutil.copy2(rp, rp + ".bak.cx-fix-" + time.strftime("%Y%m%d-%H%M%S"))
         stripped = strip_resize_notices(rp)
+        ws = repair_web_search_calls(rp)
         fixed = renumber_ordinals(rp)
-        if stripped or fixed:
+        if stripped or ws or fixed:
             reset_app_projection(sid)
-            print(f"  · 清理 {stripped} 条不兼容条目 / 重编号 {fixed} 行,已重置 App 投影")
+            if stripped: print(f"  · 清理 {stripped} 条不兼容条目")
+            if ws:       print(f"  · 补全 {ws} 条退化的 web_search 条目(缺 url/queries,否则 422)")
+            if fixed:    print(f"  · 重编号 {fixed} 行")
+            print("  · 已重置 App 投影(重开 App 后按 rollout 重建)")
     r = subprocess.run([CODEX_BIN, "exec", "resume", "--skip-git-repo-check",
                         "-c", f'model="{DS_MODEL}"', "-c", 'model_provider="deepseek"',
                         sid, "系统测试:请只回复两个字[正常]"],
@@ -501,6 +505,71 @@ def strip_resize_notices(path):
     if removed:
         open(path, "wb").writelines(keep)
     return removed
+
+def repair_web_search_calls(path):
+    """补全退化的 web_search_call action,使其能通过 DeepSeek Responses API 的严格校验。
+
+    症状:GPT 时代跑过 web search 的老会话,切到 deepseek 后一发消息就
+      422 `input: missing field `url``(或 `missing field `queries``),会话完全卡死。
+    根因:Codex 会写出 action 为空对象的退化条目,如
+      {"type":"web_search_call","status":"completed","action":{"type":"open_page"}}
+    而 DeepSeek 的 action 是严格 tag enum,必需字段缺一不可:
+      search       -> query + queries
+      open_page    -> url
+      find_in_page -> url + pattern
+    422 发生在**反序列化阶段**,所以与额度、写锁、会话内容都无关 —— 别往那些方向修。
+
+    处理:只补字段、不删行(不产生 ordinal 缺口,ordinal 无需重编号);
+    但行会变长、后续字节偏移随之位移,调用方必须 reset_app_projection()。
+    幂等;返回修复条数。
+    """
+    PLACEHOLDER = "about:blank"
+    n = 0
+    out = []
+    for ln in open(path, "rb"):
+        if b'"web_search_call"' not in ln and b'"WebSearch"' not in ln:
+            out.append(ln); continue
+        try:
+            d = json.loads(ln)
+        except Exception:
+            out.append(ln); continue
+        if d.get("type") == "response_item":
+            act = (d.get("payload") or {}).get("action")
+        elif d.get("type") == "event_msg":
+            item = (d.get("payload") or {}).get("item") or {}
+            act = item.get("action") if item.get("type") == "WebSearch" else None
+        else:
+            act = None
+        if not isinstance(act, dict):
+            out.append(ln); continue
+        kind = act.get("type")
+        if kind in ("open_page", "find_in_page"):
+            if act.get("url"):
+                out.append(ln); continue
+            patch = b',"url":' + json.dumps(PLACEHOLDER).encode()
+        elif kind == "search":
+            if act.get("queries"):
+                out.append(ln); continue
+            patch = b',"queries":' + json.dumps([act.get("query") or ""], ensure_ascii=False).encode()
+        else:
+            out.append(ln); continue
+        n += 1
+        flat = json.dumps(act, ensure_ascii=False, separators=(",", ":")).encode()
+        if ln.count(flat) == 1:
+            # 原始字节精准插入(在 action 对象闭合括号前),文件其余格式一字不动
+            out.append(ln.replace(flat, flat[:-1] + patch + b'}'))
+        else:
+            act2 = dict(act)
+            if kind == "search": act2["queries"] = [act.get("query") or ""]
+            else: act2["url"] = PLACEHOLDER
+            if d.get("type") == "response_item":
+                d["payload"]["action"] = act2
+            else:
+                d["payload"]["item"]["action"] = act2
+            out.append((json.dumps(d, ensure_ascii=False) + "\n").encode("utf-8"))
+    if n:
+        open(path, "wb").writelines(out)
+    return n
 
 def rollout_path_of(tid):
     """按 thread id 取 rollout 文件路径"""
@@ -588,12 +657,15 @@ def cmd_fix_all():
                 if not os.path.exists(bakj): shutil.copy2(rp, bakj)
                 if needs_model: rewrite_rollout(rp, model, provider)
                 stripped = sanitize_rollout(rp) if provider == "openai" else strip_resize_notices(rp)
+                # 退化 web_search_call(缺 url/queries)会让 DeepSeek 直接 422,必须补全
+                ws = repair_web_search_calls(rp)
                 # 关键:删行会产生 ordinal 缺口 + 重排会移动字节偏移;必须重编号消除缺口,
                 # 并清投影缓存让 App 从 rollout 重建,否则重开 App 后该会话内容会"消失"
                 fixed = renumber_ordinals(rp)
-                if needs_model or stripped or fixed:
+                if needs_model or stripped or ws or fixed:
                     reset_app_projection(tid)
                 if stripped: print(f"  · {tid[:8]} 清理 {stripped} 条不兼容条目")
+                if ws: print(f"  · {tid[:8]} 补全 {ws} 条退化的 web_search 条目(缺 url/queries)")
                 if fixed: print(f"  · {tid[:8]} 重编号 {fixed} 行并重置 App 投影")
             if needs_model:
                 db.execute("UPDATE threads SET model=?, model_provider=? WHERE id=?", (model, provider, tid))
