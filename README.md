@@ -53,7 +53,7 @@ cx setup sk-xxxxxxxx        # 一条命令完成:存 key → 写 config → 生�
 
 - **CLI** 直接可用：`codex "你的问题"`
 - **桌面 App**：完全退出重开即可。若首次弹出登录页，选 *Sign in another way*；配置好自定义 provider 后通常可直接选项目开始使用（无需 ChatGPT 账号）。桌面 App 需要环境变量里的 key，`cx setup` 已通过 `launchctl` 注入并由 LaunchAgent 在重启后自动恢复
-- 已有历史会话想一并切换：`cx fix-all deepseek`（**会自动退出并重开 App**，无需手动操作）
+- 已有历史会话会一并切换：`cx use deepseek`（**会自动退出并重开 App**，无需手动操作）
 
 ## 命令
 
@@ -61,16 +61,17 @@ cx setup sk-xxxxxxxx        # 一条命令完成:存 key → 写 config → 生�
 |---|---|
 | `cx setup <API_KEY>` | **全新机器一键接入**：存 key + 写配置 + 生成模型目录 + 冒烟测试（无需 ChatGPT 账号） |
 | `cx status` | 查看默认模型 / provider / 最近会话各自用的模型 |
-| `cx fix-all deepseek\|gpt` | **批量把所有老会话切换到目标模型**（自动退出 App，完事自动重开）；切到 gpt 时自动清理旧代理遗留的不兼容历史条目（`reasoning.content` 等），避免续聊报 `Invalid 'input[..].content'`；切到 deepseek 时补全退化的 `web_search_call` 条目（缺 `url`/`queries`），避免续聊报 `422 missing field url` |
-| `cx fix-all deepseek --limit 10` | 只处理最近 10 个会话（`--limit` 可按需调整，省略则处理全部） |
-| `cx use deepseek` | 切换默认模型（**只对新会话生效**；改写 `~/.codex/config.toml`，自动备份） |
+| `cx use deepseek` | **一处切换全局 + 全部会话**：写 `config.toml`（自动备份）并把所有老会话迁移到 deepseek，同时清理历史不兼容条目（`reasoning.content`、退化的 `web_search_call` 等），自动退出并重开 App |
+| `cx use deepseek --limit 10` | 只迁移最近 10 个会话（省略则处理全部） |
 | `cx use gpt` | 切回原生 ChatGPT（走 ChatGPT 登录态，无需 API key） |
 | `cx key <API_KEY>` | 保存 DeepSeek key 并注入 GUI 环境（桌面 App 需要） |
 | `cx doctor` | 体检：key 有效性 / 直连连通性 / 会话健康 |
 | `cx fix <会话ID>` | 修复某个打不开/报 404 的会话（ID 取 `cx status` 里显示的前 8 位即可） |
 | `cx fix last` | 修复最近一个会话 |
 
-**关于老会话**：每个会话记录着自己创建时的模型，`cx use` 只影响新会话——老会话继续用原模型，互不干扰。想把老会话搬到新模型：单个用 `cx fix`，全部用 `cx fix-all`（会先备份数据库和会话文件，确认后执行）。
+**关于老会话**：Codex 26.1029 起会校验「会话 provider 必须等于全局 provider」，两处不一致就拒绝进入会话。
+所以 1.0.13 起 `cx use` **一次性同时改全局配置和全部会话**，不再需要额外跑 `cx fix-all`。
+单个会话出问题时仍可用 `cx fix`（会先备份数据库和会话文件）。
 
 每次 `cx use` 都会自动备份 `config.toml`（`config.toml.bak.cx-<时间戳>`），随时可手动回滚。
 
@@ -104,7 +105,7 @@ wire_api = "responses"
 
 并把顶部改为 `model_provider = "deepseek"` / `model = "deepseek-flash"`，同时生成模型目录 `~/.codex/cx-catalog.json`。
 
-**第 4 步：完成桌面 App 配置**（见下方「桌面 App 的一次性配置」）。之后 `cx use` / `cx fix` / `cx fix-all` 都会**自动退出并重开 App**，无需手动 ⌘Q。
+**第 4 步：完成桌面 App 配置**（见下方「桌面 App 的一次性配置」）。之后 `cx use` / `cx fix` 都会**自动退出并重开 App**，无需手动 ⌘Q。
 
 验证：跑 `cx doctor`，三项全 ✅ 即配置成功；或在 App 里发条消息试试。
 
@@ -122,12 +123,12 @@ launchctl setenv DEEPSEEK_API_KEY "$(cat ~/.cx/deepseek.key)"
 
 之后 `cx use deepseek` 会**自动退出并重开 Codex App**（想手动操作也行：⌘Q 再打开）。App 的模型选择器里会出现 DeepSeek Flash / DeepSeek V4 Pro。
 
-> **从其它代理工具迁移过来的用户**：如果你的老会话记录的是代理别名（如 `deepseek/deepseek-v4-flash`），直连后无法续聊。直接执行 `cx fix-all deepseek`，它会自动退出 App、迁移完毕后自动重开。
+> **从其它代理工具迁移过来的用户**：如果你的老会话记录的是代理别名（如 `deepseek/deepseek-v4-flash`），直连后无法续聊。直接执行 `cx use deepseek`，它会自动退出 App、切换全局并把全部老会话迁移完毕，然后自动重开。
 
 ## 常见问题
 
 **Q: 切换/迁移后 App 里还是报错？**
-桌面 App 启动时读取配置，必须**完全退出**（⌘Q，不是关窗口）再打开。`cx use` / `cx fix` / `cx fix-all` 默认会代劳这件事；想自己控制加 `--no-reopen`（改完不重开）或 `--keep-app`（完全不动 App，在运行则报错）。
+桌面 App 启动时读取配置，必须**完全退出**（⌘Q，不是关窗口）再打开。`cx use` / `cx fix` 默认会代劳这件事；想自己控制加 `--no-reopen`（改完不重开）或 `--keep-app`（完全不动 App，在运行则报错）。
 
 **Q: 终端里 codex 能用，桌面 App 报 key 错误？**
 App 没读到 `DEEPSEEK_API_KEY`。执行上面「桌面 App 的一次性配置」后重启 App。
@@ -162,10 +163,10 @@ Codex 用 `view_image` 看图片时会**连续发起多个调用**，并在每�
 `No tool output found for tool call ...`，该会话从此发不出消息（与 `cx` 本身无关，是 Codex 的历史
 组装方式在 DeepSeek 侧的兼容问题）。
 
-1.0.9 已修复：`cx fix <会话UUID>` 与 `cx fix-all deepseek` 会先删掉这些纯提示性质的 notice 消息
+1.0.9 已修复：`cx fix <会话UUID>` 与 `cx use deepseek` 会先删掉这些纯提示性质的 notice 消息
 （**只删缩放提示，工具调用记录与对话内容全部保留**），再重编号 `ordinal` 并重置投影缓存。
 
-已中招的会话：升级到 1.0.9 → **完全退出 App** → `cx fix <会话UUID>`（或 `cx fix-all deepseek`）→ 重开 App。
+已中招的会话：升级到 1.0.9 → **完全退出 App** → `cx fix <会话UUID>`（或 `cx use deepseek`）→ 重开 App。
 
 > 注意：之后若又在 deepseek 会话里让 Codex 看图（再次触发 `view_image`），会重新产生这类提示消息，
 > 可能再次报同样的错——再跑一次 `cx fix` 即可。排查手法：把该会话的请求体抓下来，删除
@@ -183,13 +184,23 @@ DeepSeek 的 `action` 是严格枚举，必需字段缺一不可：`search` 要 
 `find_in_page` 要 `url` + `pattern`。缺字段时**整个请求在反序列化阶段就被拒**——所以报的是 422
 `Failed to deserialize the JSON body`，而不是普通的业务报错，该会话从此一条消息都发不出去。
 
-1.0.12 已修复：`cx fix <会话UUID>` 与 `cx fix-all` 会**补全**这类条目（缺 `url` 补 `about:blank`，缺 `queries`
+1.0.12 已修复：`cx fix <会话UUID>` 与 `cx use deepseek` 会**补全**这类条目（缺 `url` 补 `about:blank`，缺 `queries`
 按 `query` 生成）。**只补字段、不删行**，所以不产生 `ordinal` 缺口；随后照例重置投影缓存。
 
-已中招的会话：升级到 1.0.12 → **完全退出 App** → `cx fix <会话UUID>`（或 `cx fix-all deepseek`）→ 重开 App。
+已中招的会话：升级到 1.0.12 → **完全退出 App** → `cx fix <会话UUID>`（或 `cx use deepseek`）→ 重开 App。
 
 > 排查要点：422 是 DeepSeek 侧反序列化失败，与本机额度、会话写锁、`cx` 配置都无关，别往那些方向修。
 > 用 `curl` 直接打 `https://api.deepseek.com/v1/responses`、`input` 里塞一条可疑条目即可复现/定位。
+
+## 更新日志
+
+**1.0.13** — Codex 桌面 App 26.1029 起会校验「会话 provider == 全局 provider」，只改会话不再够用。
+`cx use` 现同时写全局配置并迁移全部会话（原 `fix-all` 能力已并入，`cx fix-all` 仅作兼容入口转调 `cx use`）。
+`cx use` 期间会无条件退出 App 以独占 `state_5.sqlite`，完成后自动重开。
+
+**1.0.12** — `fix` 补全退化的 `web_search_call`（缺 `url` / `queries`），修复切 deepseek 后 422。
+
+**1.0.9** — `fix` 清除 `image_resize_notice`，修复 `No tool output found` 导致的会话卡死。
 
 ## 隐私说明
 

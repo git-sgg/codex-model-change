@@ -4,17 +4,14 @@
 无代理、无常驻进程。Codex 直连 deepseek(Responses API) / 原生 ChatGPT。
 命令:
   cx status              查看当前模型配置与最近会话
-  cx fix-all deepseek|gpt
-                         把所有老会话批量切到目标模型 + 清理历史兼容问题(需退 App)
-                         例: cx fix-all deepseek --limit 10 (只改最近 10 个)
-  cx use deepseek|gpt    切换默认模型(只针对新会话生效)
+  cx use deepseek|gpt    切换默认模型,并同步切换全部新老会话(含历史兼容清理)
   cx doctor              体检: key/直连/会话健康
   cx key <API_KEY>       保存 deepseek key 并注入 GUI 环境(launchctl setenv)
   cx fix <会话ID>        修复单个会话(清理不兼容历史条目,续跑一轮写入正确模型)
 """
 import json, os, re, glob, sqlite3, subprocess, sys, shutil, time, urllib.request, urllib.error
 
-CX_VERSION = "1.0.12"
+CX_VERSION = "1.0.13"
 
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 CONFIG = os.path.join(CODEX_HOME, "config.toml")
@@ -48,23 +45,21 @@ HELP = """cx — Codex 模型直连切换器
 命令一览:
   setup <API_KEY>      全新机器一键接入 DeepSeek(无需 GPT 账号/登录,含冒烟测试)
   status               查看默认模型/provider/最近会话(不带参数执行 cx 等同于此)
-  fix-all deepseek|gpt 批量把所有老会话切换到目标模型 + 清理历史兼容问题(自动退出 App,完事自动重开)
-                       用法: cx fix-all deepseek|gpt [--limit N]
-                       例: cx fix-all deepseek --limit 10 (只改最近 10 个)
-  use deepseek|gpt     切换默认模型(只针对新会话生效;自动退出并重开 App)
+  fix-all deepseek|gpt 已并入 cx use(保留仅为兼容旧习惯,会提示改用 cx use)
+  use deepseek|gpt     切换默认模型,并同步切换全部新老会话(自动退出并重开 App)
   key <API_KEY>        保存 deepseek key 并注入 GUI 环境(桌面 App 需要)
   doctor               体检: key 有效性/直连连通性/会话健康
   fix <会话ID|last>    修复单个会话:清理不兼容历史条目(含退化 web_search)+ 续跑一轮
   version              显示 cx 版本
   help                 显示本帮助
 
-可选开关(配合 use / fix / fix-all):
+可选开关(配合 use / fix):
   --no-reopen          改完不要把 App 重新打开(默认改完自动重开)
   --keep-app           (use 里同 --no-restart)完全不动 App,在运行则直接报错(旧行为)
 
 要点:
-  - 切换只影响新会话;老会话各自保持原模型,想搬运用 fix / fix-all
-  - 改配置/改会话需要 App 重读,这三条命令会**自动优雅退出 App,完事再拉起来**
+  - cx use 会同时切换全局配置和全部会话;单个会话可用 cx fix <ID>
+  - 改配置/改会话需要 App 重读,这两条命令会**自动优雅退出 App,完事再拉起来**
   - 仓库: https://github.com/git-sgg/codex-model-change
 """
 
@@ -233,11 +228,17 @@ def reset_app_projection(thread_id):
 
 # ---------- 命令 ----------
 def cmd_use(which, restart=True):
-    if which not in ("deepseek", "gpt"): err("用法: cx use deepseek|gpt [--no-restart]")
-    flags = set(a for a in sys.argv[2:] if a.startswith("-"))
+    if which not in ("deepseek", "gpt"): err("用法: cx use deepseek|gpt [--no-restart] [--limit N]")
+    args = sys.argv[2:]
+    flags = set(a for a in args if a.startswith("-"))
     if flags & {"--no-restart", "--keep-app"}: restart = False
-    # 桌面 App 只在启动时读 config.toml:先自动退出,写完再拉起来,新会话即刻生效
-    was_running = quit_app() if (restart and app_running()) else False
+    limit = None
+    for i, a in enumerate(args):
+        if a == "--limit" and i + 1 < len(args): limit = int(args[i+1]) if args[i+1].isdigit() else None
+        elif a.startswith("--limit="):
+            v = a.split("=", 1)[1]; limit = int(v) if v.isdigit() else None
+    # 桌面 App 只在启动时读 config.toml;且会话迁移要独占数据库,先退出
+    was_running = quit_app() if app_running() else False
     backup_cfg(f"use-{which}-")
     text = read_cfg()
     if which == "deepseek":
@@ -250,13 +251,19 @@ def cmd_use(which, restart=True):
     write_catalog()
     os.makedirs(CODEX_HOME, exist_ok=True)
     open(CONFIG, "w", encoding="utf-8").write(text)
-    ok(f"已切换到 {which}: model 已写入,备份在同目录")
+    ok(f"已切换到 {which}: 全局 model/provider 已写入")
     if which == "deepseek" and not load_key():
         info("未保存 deepseek key,先运行: cx key <API_KEY> (或直接 cx setup <API_KEY> 一键完成)")
-    if was_running:
-        open_app()
-    else:
-        info("桌面 App 需完全退出重开才会重读配置(可让 cx 代劳:去掉 --no-restart)")
+    # 新版 App 会校验"会话 provider == 当前 provider",所以必须连会话一起迁移
+    try:
+        migrate_threads(which, limit=limit)
+    finally:
+        if was_running and restart:
+            open_app()
+        elif was_running:
+            info("App 已退出未重开,手动打开后生效")
+        else:
+            info("桌面 App 需完全退出重开才会重读配置(可让 cx 代劳:去掉 --no-restart)")
 
 def save_key(key):
     os.makedirs(CX_DIR, exist_ok=True)
@@ -322,7 +329,7 @@ def cmd_setup():
     print("  · CLI 现在就能用: codex \"你的问题\"")
     print("  · 桌面 App: 完全退出重开即可。若首次弹出登录页,选 Sign in another way;")
     print("    配置好自定义 provider 后通常可直接选项目开始用(无需 ChatGPT 账号)")
-    print("  · 想把旧会话也切过来: cx fix-all deepseek")
+    print("  · 老会话已随 cx use 一起切换,无需额外操作")
 
 def app_pids():
     out = set()
@@ -387,7 +394,7 @@ def cmd_status():
         print("\n最近会话:")
         for r in rows: print(f"  {r[0]}  {str(r[1]):<28} {r[2]}")
         bad = db.execute("SELECT COUNT(*) FROM threads WHERE model LIKE 'deepseek/%' OR model='deepseek-v4-flash'").fetchone()[0]
-        if bad: print(f"\n⚠️  {bad} 个会话仍是旧格式模型 id(可运行 cx fix-all deepseek 统一迁移)")
+        if bad: print(f"\n⚠️  {bad} 个会话仍是旧格式模型 id(可运行 cx use deepseek 统一迁移)")
     except Exception as e:
         print("(会话库读取失败: %s)" % e)
 
@@ -604,24 +611,9 @@ def rewrite_rollout(path, model, provider):
         open(path, "w", encoding="utf-8").writelines(new_lines)
     return changed
 
-def cmd_fix_all():
-    args = sys.argv[2:]
-    which = args[0] if args and not args[0].startswith("-") else ""
-    limit = None
-    for i, a in enumerate(args):
-        if a == "--limit" and i + 1 < len(args):
-            limit = int(args[i + 1]) if args[i + 1].isdigit() else None
-        elif a.startswith("--limit="):
-            v = a.split("=", 1)[1]
-            limit = int(v) if v.isdigit() else None
-    if which not in ("deepseek", "gpt"):
-        err("用法: cx fix-all deepseek|gpt [--limit N] [--keep-app] [--no-reopen]\n"
-            "     (--limit N 只改最近 N 个,默认全部)")
+def migrate_threads(which, limit=None, quiet=False):
+    """把会话批量切到目标模型/provider + 清理历史兼容问题。调用前 App 必须已退出。"""
     model, provider = (DS_MODEL, "deepseek") if which == "deepseek" else (GPT_MODEL, "openai")
-    keep_app = "--keep-app" in [a for a in args if a.startswith("-")]
-    no_reopen = "--no-reopen" in [a for a in args if a.startswith("-")]
-    if keep_app and app_running():
-        err("App 正在运行(会话有写入锁)。去掉 --keep-app 可让 cx 自动退出并恢复 App;单个会话可用 cx fix <ID>")
     dbpath = os.path.join(CODEX_HOME, "state_5.sqlite")
     db = sqlite3.connect(dbpath)
     q = ("SELECT id, model, model_provider, rollout_path FROM threads "
@@ -638,48 +630,43 @@ def cmd_fix_all():
         if needs_model or needs_sanitize:
             todo.append((tid, m, p, rp, needs_model))
     if not todo:
-        ok(f"所有会话已经是 {model},无需切换"); db.close(); return
-    scope = f"最近 {limit} 个中" if limit else ""
-    print(f"{scope}待切换 {len(todo)} / {len(rows)} 个会话 → {model} ({provider})")
-    if input("确认执行? [y/N] ").strip().lower() != "y":
-        info("已取消"); db.close(); return
-    was_running = quit_app() if app_running() else False
-    reopened = False
-    try:
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        bak = os.path.join(CODEX_HOME, f"state_5.sqlite.bak.cx-fixall-{ts}")
-        shutil.copy2(dbpath, bak)
-        ok(f"数据库已备份: {bak}")
-        n = 0
-        for tid, m, p, rp, needs_model in todo:
-            if rp and os.path.exists(rp):
-                bakj = rp + f".bak.cx-fixall-{ts}"
-                if not os.path.exists(bakj): shutil.copy2(rp, bakj)
-                if needs_model: rewrite_rollout(rp, model, provider)
-                stripped = sanitize_rollout(rp) if provider == "openai" else strip_resize_notices(rp)
-                # 退化 web_search_call(缺 url/queries)会让 DeepSeek 直接 422,必须补全
-                ws = repair_web_search_calls(rp)
-                # 关键:删行会产生 ordinal 缺口 + 重排会移动字节偏移;必须重编号消除缺口,
-                # 并清投影缓存让 App 从 rollout 重建,否则重开 App 后该会话内容会"消失"
-                fixed = renumber_ordinals(rp)
-                if needs_model or stripped or ws or fixed:
-                    reset_app_projection(tid)
-                if stripped: print(f"  · {tid[:8]} 清理 {stripped} 条不兼容条目")
-                if ws: print(f"  · {tid[:8]} 补全 {ws} 条退化的 web_search 条目(缺 url/queries)")
-                if fixed: print(f"  · {tid[:8]} 重编号 {fixed} 行并重置 App 投影")
-            if needs_model:
-                db.execute("UPDATE threads SET model=?, model_provider=? WHERE id=?", (model, provider, tid))
-            n += 1
-        db.commit(); db.close()
-        ok(f"已切换 {n} 个会话 → {model}")
-        if was_running and not no_reopen:
-            open_app(); reopened = True
-        elif not was_running:
-            info("重开 App 生效(若 App 在运行可让 cx 代劳:去掉 --no-reopen)")
-    finally:
-        # 中途出错也要把 App 恢复回去,避免用户以为 App 崩了
-        if was_running and not no_reopen and not reopened:
-            open_app()
+        if not quiet: ok(f"所有会话已经是 {model},无需迁移")
+        db.close(); return 0
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    bak = os.path.join(CODEX_HOME, f"state_5.sqlite.bak.cx-use-{ts}")
+    shutil.copy2(dbpath, bak)
+    if not quiet: ok(f"数据库已备份: {bak}")
+    n = 0
+    for tid, m, p, rp, needs_model in todo:
+        if rp and os.path.exists(rp):
+            bakj = rp + f".bak.cx-use-{ts}"
+            if not os.path.exists(bakj): shutil.copy2(rp, bakj)
+            if needs_model: rewrite_rollout(rp, model, provider)
+            stripped = sanitize_rollout(rp) if provider == "openai" else strip_resize_notices(rp)
+            # 退化 web_search_call(缺 url/queries)会让 DeepSeek 直接 422,必须补全
+            ws = repair_web_search_calls(rp)
+            # 关键:删行会产生 ordinal 缺口 + 重排会移动字节偏移;必须重编号消除缺口,
+            # 并清投影缓存让 App 从 rollout 重建,否则重开 App 后该会话内容会"消失"
+            fixed = renumber_ordinals(rp)
+            if needs_model or stripped or ws or fixed:
+                reset_app_projection(tid)
+            if stripped: print(f"  · {tid[:8]} 清理 {stripped} 条不兼容条目")
+            if ws: print(f"  · {tid[:8]} 补全 {ws} 条退化的 web_search 条目(缺 url/queries)")
+            if fixed: print(f"  · {tid[:8]} 重编号 {fixed} 行并重置 App 投影")
+        if needs_model:
+            db.execute("UPDATE threads SET model=?, model_provider=? WHERE id=?", (model, provider, tid))
+        n += 1
+    db.commit(); db.close()
+    ok(f"已切换 {n} 个会话 → {model} ({provider})")
+    return n
+
+def cmd_fix_all():
+    # 已并入 cx use:保留入口只为兼容旧习惯
+    which = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("-") else ""
+    if which not in ("deepseek", "gpt"):
+        err("用法: cx use deepseek|gpt\n     (fix-all 已并入 cx use,老会话会一起切换)")
+    info("fix-all 已并入 cx use,正在按 cx use 执行…")
+    cmd_use(which)
 
 def main():
     if len(sys.argv) < 2: cmd_status(); return
