@@ -11,7 +11,7 @@
 """
 import json, os, re, glob, sqlite3, subprocess, sys, shutil, time, urllib.request, urllib.error
 
-CX_VERSION = "1.0.13"
+CX_VERSION = "1.0.14"
 
 CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 CONFIG = os.path.join(CODEX_HOME, "config.toml")
@@ -103,7 +103,7 @@ def _ds_entry(slug, name, desc, priority, ctx=1048576, compact=900000):
         "supports_parallel_tool_calls": True,
         "supports_image_detail_original": False, "comp_hash": "cx1",
         "effective_context_window_percent": 95,
-        "experimental_supported_tools": [], "input_modalities": ["text"],
+        "experimental_supported_tools": [], "input_modalities": ["text", "image"],
         "supports_search_tool": False, "tool_mode": "default",
         "node_repl_disabled": True, "node_repl_auto_review_required": False,
         "include_plugin_usage_instructions": False, "include_apps_usage_instructions": False,
